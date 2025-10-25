@@ -1,0 +1,69 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+
+# ---- Entornos virtuales ----
+.env
+.venv/
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# ---- Archivos de configuración locales ----
+*.env
+*.ini
+*.toml
+*.cfg
+
+# ---- SQLite Database ----
+*.sqlite3
+*.db
+*.sqlite
+*.sqlite-journal
+
+# ---- Archivos de logs ----
+*.log
+logs/
+*.out
+*.err
+
+# ---- Archivos temporales o de caché ----
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ---- Dependencias locales ----
+pip-wheel-metadata/
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# ---- Jupyter / Notebooks ----
+.ipynb_checkpoints/
+
+# ---- IDEs / Editores ----
+.vscode/
+.idea/
+*.iml
+*.sublime-project
+*.sublime-workspace
+
+# ---- Coverage / Testing ----
+.coverage
+htmlcov/
+.tox/
+.nox/
+pytest_cache/
+coverage.xml
+
+# ---- Documentación generada ----
+docs/_build/
+site/
