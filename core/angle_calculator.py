@@ -1,58 +1,72 @@
 import numpy as np
-
-
 from core.utils import safe_round
 
 
 def calculate_angle(a, b, c):
     """
-    Calcula el ángulo (en grados) formado por tres puntos A-B-C.
+    Compute the angle (in degrees) formed by three 2D points A–B–C.
 
-    Parámetros:
-    -----------
-    a, b, c : list o tuple de dos elementos
-        Coordenadas (x, y) de los puntos A, B y C.
-        El punto 'b' es el vértice del ángulo.
+    Parameters
+    ----------
+    a : tuple[float, float]
+        Coordinates (x, y) of the first point (A).
+    b : tuple[float, float]
+        Coordinates (x, y) of the vertex point (B).
+    c : tuple[float, float]
+        Coordinates (x, y) of the third point (C).
 
-    Retorna:
-    --------
-    float
-        Ángulo en grados entre los segmentos BA y BC.
+    Returns
+    -------
+    float or None
+        The absolute angle in degrees between the segments BA and BC.
+        Returns None if the input is invalid or the calculation fails.
 
-    Notas:
-    ------
-    - El resultado está en el rango [0, 180].
-    - Si alguno de los puntos es inválido (None o contiene NaN),
-      devuelve None.
+    Notes
+    -----
+    - The result is always in the range [0, 180].
+    - Handles NaN and zero-length vectors safely.
+    - This function assumes coordinates are normalized or within consistent units.
+
+    Example
+    -------
+    >>> calculate_angle((0, 1), (0, 0), (1, 0))
+    90.0
     """
-
     try:
-        # Convertir a arrays NumPy
-        a = np.array(a, dtype=float)
-        b = np.array(b, dtype=float)
-        c = np.array(c, dtype=float)
+        # Validate input
+        if a is None or b is None or c is None:
+            raise ValueError("Input points cannot be None.")
 
-        # Vectores
+        # Convert to NumPy arrays (float precision)
+        a, b, c = np.array(a, dtype=float), np.array(b, dtype=float), np.array(c, dtype=float)
+
+        # Handle potential NaNs
+        if np.isnan(a).any() or np.isnan(b).any() or np.isnan(c).any():
+            raise ValueError("Input points contain NaN values.")
+
+        # Compute vectors BA and BC
         ba = a - b
         bc = c - b
 
-        # Normalizar (evita divisiones por cero)
+        # Compute magnitudes
         norm_ba = np.linalg.norm(ba)
         norm_bc = np.linalg.norm(bc)
+
+        # Avoid division by zero
         if norm_ba == 0 or norm_bc == 0:
             return None
 
-        # Calcular coseno del ángulo
+        # Compute cosine of the angle using the dot product formula
         cosine_angle = np.dot(ba, bc) / (norm_ba * norm_bc)
 
-        # Evitar errores por precisión numérica
+        # Clip to valid numerical range to prevent NaN from floating-point errors
         cosine_angle = np.clip(cosine_angle, -1.0, 1.0)
 
-        # Convertir a grados
+        # Compute the angle in degrees
         angle = np.degrees(np.arccos(cosine_angle))
+
         return safe_round(abs(angle))
 
-
     except Exception as e:
-        print(f"[calculate_angle] Error al calcular ángulo: {e}")
+        print(f"[calculate_angle] Failed to compute angle: {e}")
         return None
