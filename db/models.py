@@ -3,6 +3,10 @@ Database schema definition for the Recon IA system.
 This module defines the SQL table creation statements required to initialize
 the local SQLite database used for patient management, session tracking, 
 and biomechanical data storage.
+
+NUEVO: 
+- Incluye columnas de simetría bilateral para análisis comparativo
+- Soporte para 3 versiones de vídeo por sesión (raw, mediapipe, legacy)
 """
 
 # ============================================================
@@ -42,7 +46,17 @@ CREATE TABLE IF NOT EXISTS sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     patient_id INTEGER NOT NULL,
     exercise_id INTEGER,
-    video_path TEXT,
+    
+    -- ============================================================
+    -- VIDEO PATHS - Múltiples versiones de salida
+    -- ============================================================
+    video_path_raw TEXT,        -- Vídeo sin procesar (original, sin overlays)
+    video_path_mediapipe TEXT,  -- Vídeo con overlay MediaPipe completo (33 landmarks)
+    video_path_legacy TEXT,     -- Vídeo con overlay clínico personalizado (barritas y puntos)
+    
+    -- Columna legacy (deprecated, mantener por compatibilidad)
+    video_path TEXT,            -- Apunta al vídeo principal (normalmente legacy)
+    
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     notes TEXT,
     FOREIGN KEY (patient_id) REFERENCES patients(id) ON DELETE CASCADE,
@@ -79,7 +93,7 @@ CREATE TABLE IF NOT EXISTS movement_data (
     ankle_x_r REAL, ankle_y_r REAL,
     angle_leg_r REAL,
 
-    -- Right foot (NUEVO)
+    -- Right foot
     heel_x_r REAL, heel_y_r REAL,
     foot_index_x_r REAL, foot_index_y_r REAL,
 
@@ -89,9 +103,24 @@ CREATE TABLE IF NOT EXISTS movement_data (
     ankle_x_l REAL, ankle_y_l REAL,
     angle_leg_l REAL,
 
-    -- Left foot (NUEVO)
+    -- Left foot
     heel_x_l REAL, heel_y_l REAL,
     foot_index_x_l REAL, foot_index_y_l REAL,
+
+    -- ============================================================
+    -- BILATERAL SYMMETRY METRICS
+    -- ============================================================
+    -- Valores cercanos a 0 indican simetría perfecta
+    -- Valores altos indican asimetría/compensación
+    
+    -- Angular symmetry (degrees)
+    symmetry_angle_arm REAL,  -- Diferencia angular entre brazos
+    symmetry_angle_leg REAL,  -- Diferencia angular entre piernas
+    
+    -- Positional symmetry (pixels)
+    symmetry_shoulder_y REAL, -- Diferencia vertical entre hombros
+    symmetry_elbow_y REAL,    -- Diferencia vertical entre codos
+    symmetry_knee_y REAL,     -- Diferencia vertical entre rodillas
 
     FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
 );

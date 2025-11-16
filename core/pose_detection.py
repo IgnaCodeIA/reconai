@@ -1,91 +1,159 @@
-import mediapipe as mp
+# core/pose_detection.py
+"""
+Wrapper para MediaPipe Pose detection.
+Gestiona detección de landmarks y rendering de overlays.
+
+NUEVO: Soporte para overlay MediaPipe completo (33 landmarks + conexiones estándar)
+"""
+
 import cv2
-from core.utils import log_info, log_error
+import mediapipe as mp
+from typing import Dict, Tuple, Any
 
 
 class PoseDetector:
     """
-    Clase encargada de inicializar y ejecutar MediaPipe Pose
-    para la detección de puntos articulares (landmarks) en imágenes o vídeo.
+    Detector de pose usando MediaPipe.
+    
+    Funcionalidades:
+    - Detección de 33 landmarks corporales
+    - Extracción de coordenadas normalizadas
+    - Overlay estándar de MediaPipe (completo)
+    - Overlay personalizado (legacy - en legacy_overlay.py)
     """
-
-    def __init__(self, min_detection_confidence=0.5, min_tracking_confidence=0.5):
+    
+    def __init__(
+        self,
+        static_image_mode: bool = False,
+        model_complexity: int = 1,
+        smooth_landmarks: bool = True,
+        min_detection_confidence: float = 0.5,
+        min_tracking_confidence: float = 0.5
+    ):
+        """
+        Inicializa el detector de pose.
+        
+        Args:
+            static_image_mode: Si True, trata cada imagen independientemente
+            model_complexity: 0 (ligero), 1 (normal), 2 (pesado)
+            smooth_landmarks: Suavizado temporal de landmarks
+            min_detection_confidence: Umbral mínimo de detección
+            min_tracking_confidence: Umbral mínimo de tracking
+        """
         self.mp_pose = mp.solutions.pose
+        self.mp_drawing = mp.solutions.drawing_utils
+        self.mp_drawing_styles = mp.solutions.drawing_styles
+        
         self.pose = self.mp_pose.Pose(
+            static_image_mode=static_image_mode,
+            model_complexity=model_complexity,
+            smooth_landmarks=smooth_landmarks,
             min_detection_confidence=min_detection_confidence,
             min_tracking_confidence=min_tracking_confidence
         )
-        self.mp_drawing = mp.solutions.drawing_utils
-        log_info("PoseDetector inicializado correctamente con MediaPipe Pose.")
-
-    def process_frame(self, frame):
+    
+    def process_frame(self, frame_bgr) -> Tuple[Any, Any]:
         """
-        Procesa un frame con MediaPipe Pose y devuelve los resultados.
-
-        Parámetros:
-        -----------
-        frame : np.ndarray
-            Imagen en formato BGR (como la devuelve OpenCV).
-
-        Retorna:
-        --------
-        tuple[np.ndarray, mediapipe.python.solutions.pose.PoseLandmarks or None]
-            (imagen procesada BGR, resultados de MediaPipe o None si hay error)
+        Procesa un frame BGR y detecta pose.
+        
+        Args:
+            frame_bgr: Frame en formato BGR (OpenCV)
+        
+        Returns:
+            Tupla (frame_bgr, results)
+            - frame_bgr: El mismo frame de entrada (sin modificar)
+            - results: Resultados de MediaPipe con pose_landmarks
         """
-        try:
-            image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            image_rgb.flags.writeable = False
-            results = self.pose.process(image_rgb)
-            image_rgb.flags.writeable = True
-            image_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
-            return image_bgr, results
-        except Exception as e:
-            log_error(f"Error procesando frame: {e}")
-            return frame, None
-
-    def draw_landmarks(self, image, results):
+        # MediaPipe requiere RGB
+        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        
+        # Procesamiento
+        results = self.pose.process(frame_rgb)
+        
+        return frame_bgr, results
+    
+    def extract_landmarks(self, results) -> Dict[str, Tuple[float, float, float, float]]:
         """
-        Dibuja los landmarks y las conexiones del cuerpo sobre la imagen.
-
-        Parámetros:
-        -----------
-        image : np.ndarray
-            Imagen en formato BGR.
-        results : mediapipe.framework.formats.landmark_pb2.NormalizedLandmarkList
-            Resultado de MediaPipe Pose.
+        Extrae landmarks en formato de diccionario.
+        
+        Args:
+            results: Resultados de MediaPipe
+        
+        Returns:
+            Diccionario {nombre_landmark: (x, y, z, visibility)}
+            Coordenadas normalizadas [0..1]
+        """
+        if not results or not results.pose_landmarks:
+            return {}
+        
+        landmarks_dict = {}
+        for idx, landmark in enumerate(results.pose_landmarks.landmark):
+            landmark_name = self.mp_pose.PoseLandmark(idx).name
+            landmarks_dict[landmark_name] = (
+                landmark.x,
+                landmark.y,
+                landmark.z,
+                landmark.visibility
+            )
+        
+        return landmarks_dict
+    
+    def draw_landmarks(self, image, results) -> Any:
+        """
+        Dibuja landmarks básicos sobre la imagen (versión simple).
+        
+        DEPRECADO: Usar draw_mediapipe_full_overlay() para overlay completo.
+        
+        Args:
+            image: Frame BGR
+            results: Resultados de MediaPipe
+        
+        Returns:
+            Imagen con landmarks dibujados
         """
         if results and results.pose_landmarks:
             self.mp_drawing.draw_landmarks(
                 image,
                 results.pose_landmarks,
-                self.mp_pose.POSE_CONNECTIONS,
-                landmark_drawing_spec=self.mp_drawing.DrawingSpec(color=(0, 0, 255), thickness=2, circle_radius=2),
-                connection_drawing_spec=self.mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2)
+                self.mp_pose.POSE_CONNECTIONS
             )
         return image
-
-    def extract_landmarks(self, results):
+    
+    def draw_mediapipe_full_overlay(self, image, results) -> Any:
         """
-        Extrae las coordenadas (x, y, z, visibility) de todos los landmarks detectados.
-
-        Parámetros:
-        -----------
-        results : mediapipe.python.solutions.pose.PoseLandmarks
-
-        Retorna:
-        --------
-        dict[str, tuple]
-            Diccionario con los nombres de los landmarks y sus coordenadas.
+        Dibuja el overlay COMPLETO de MediaPipe con estilo estándar.
+        
+        Incluye:
+        - 33 landmarks con círculos
+        - Conexiones entre landmarks (esqueleto completo)
+        - Estilo de colores estándar de MediaPipe
+        
+        Args:
+            image: Frame BGR (se modifica in-place)
+            results: Resultados de MediaPipe
+        
+        Returns:
+            Imagen con overlay completo de MediaPipe
         """
         if not results or not results.pose_landmarks:
-            return {}
-
-        landmarks = {}
-        for idx, lm in enumerate(results.pose_landmarks.landmark):
-            name = self.mp_pose.PoseLandmark(idx).name
-            landmarks[name] = (lm.x, lm.y, lm.z, lm.visibility)
-        return landmarks
-
+            return image
+        
+        # Dibujar landmarks + conexiones con estilo completo
+        self.mp_drawing.draw_landmarks(
+            image,
+            results.pose_landmarks,
+            self.mp_pose.POSE_CONNECTIONS,
+            landmark_drawing_spec=self.mp_drawing_styles.get_default_pose_landmarks_style(),
+            connection_drawing_spec=self.mp_drawing.DrawingSpec(
+                color=(0, 255, 0),  # Verde
+                thickness=2,
+                circle_radius=2
+            )
+        )
+        
+        return image
+    
     def release(self):
-        """Libera los recursos del modelo de MediaPipe."""
-        self.pose.close()
+        """Libera recursos de MediaPipe."""
+        if hasattr(self, 'pose') and self.pose:
+            self.pose.close()

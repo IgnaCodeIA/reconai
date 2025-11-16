@@ -1,362 +1,513 @@
 # db/crud.py
 """
-CRUD operations (Create, Read, Update, Delete) for the local Recon IA database.
+CRUD operations para la base de datos SQLite.
+Gestiona pacientes, ejercicios, sesiones, datos de movimiento y métricas.
 
-Provides helper functions to manage patients, exercises, sessions,
-movement data, and metrics with automatic connection management.
+NUEVO: 
+- Soporte optimizado para columnas dinámicas en movement_data
+- Métricas de simetría bilateral
+- Múltiples versiones de vídeo por sesión
 """
 
 import sqlite3
+from typing import List, Dict, Any, Tuple
 from db.init_db import get_connection
-from core.logger import get_logger
 
-log = get_logger("db.crud")
 
 # ============================================================
-# PATIENTS
+# PACIENTES
 # ============================================================
 
-def create_patient(name, dni=None, age=None, gender=None, notes=None):
-    """Crea un nuevo paciente, validando que el DNI no exista previamente."""
+def create_patient(
+    name: str,
+    dni: str | None = None,
+    age: int | None = None,
+    gender: str | None = None,
+    notes: str | None = None
+) -> int:
+    """
+    Crea un nuevo paciente.
+    
+    Args:
+        name: Nombre del paciente (requerido)
+        dni: DNI/identificación (único, opcional)
+        age: Edad (opcional)
+        gender: Género (M, F, Other)
+        notes: Notas adicionales
+    
+    Returns:
+        ID del paciente creado
+    
+    Raises:
+        ValueError: Si gender no es válido o DNI duplicado
+    """
+    # Validaciones
+    if gender and gender not in ("M", "F", "Other"):
+        raise ValueError(f"Género inválido: {gender}. Use 'M', 'F' o 'Other'")
+    
     with get_connection() as conn:
-        cursor = conn.cursor()
-
-        if gender not in ["M", "F", "Other"]:
-            gender = "Other"
-        try:
-            age = int(age) if age is not None else None
-        except ValueError:
-            age = None
-
-        # Evitar duplicados por DNI
+        cur = conn.cursor()
+        
+        # Verificar DNI único
         if dni:
-            cursor.execute("SELECT id FROM patients WHERE dni = ?", (dni,))
-            if cursor.fetchone():
-                raise ValueError("Ya existe un paciente con ese DNI.")
-
-        cursor.execute("""
+            cur.execute("SELECT id FROM patients WHERE dni = ?", (dni,))
+            if cur.fetchone():
+                raise ValueError(f"Ya existe un paciente con DNI: {dni}")
+        
+        cur.execute(
+            """
             INSERT INTO patients (name, dni, age, gender, notes)
             VALUES (?, ?, ?, ?, ?)
-        """, (name, dni, age, gender, notes))
+            """,
+            (name, dni, age, gender, notes)
+        )
         conn.commit()
-        pid = cursor.lastrowid
-        log.info(f"create_patient OK: id={pid}")
-        return pid
+        return cur.lastrowid
 
 
-def get_all_patients():
-    """Devuelve todos los pacientes registrados."""
+def get_all_patients() -> List[Tuple]:
+    """
+    Obtiene todos los pacientes.
+    
+    Returns:
+        Lista de tuplas: (id, name, dni, age, gender, notes, created_at)
+    """
     with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT id, name, dni, age, gender, notes, created_at
-            FROM patients
-            ORDER BY created_at DESC
-        """)
-        return cursor.fetchall()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, name, dni, age, gender, notes, created_at FROM patients ORDER BY name"
+        )
+        return cur.fetchall()
 
 
-def get_patient_by_id(patient_id):
-    """Obtiene un paciente por su ID."""
+def get_patient_by_id(patient_id: int) -> Tuple | None:
+    """Obtiene un paciente por ID."""
     with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM patients WHERE id = ?", (patient_id,))
-        return cursor.fetchone()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, name, dni, age, gender, notes, created_at FROM patients WHERE id = ?",
+            (patient_id,)
+        )
+        return cur.fetchone()
 
 
-def update_patient(patient_id, name=None, dni=None, age=None, gender=None, notes=None):
-    """Actualiza un paciente existente con validaciones básicas."""
+def update_patient(
+    patient_id: int,
+    name: str | None = None,
+    dni: str | None = None,
+    age: int | None = None,
+    gender: str | None = None,
+    notes: str | None = None
+) -> bool:
+    """
+    Actualiza un paciente existente.
+    
+    Returns:
+        True si se actualizó, False si no existe
+    """
+    if gender and gender not in ("M", "F", "Other"):
+        raise ValueError(f"Género inválido: {gender}")
+    
     with get_connection() as conn:
-        cursor = conn.cursor()
-
-        if gender not in ["M", "F", "Other"]:
-            gender = "Other"
-        try:
-            age = int(age) if age is not None else None
-        except ValueError:
-            age = None
-
-        cursor.execute("""
-            UPDATE patients
-            SET name = COALESCE(?, name),
-                dni = COALESCE(?, dni),
-                age = COALESCE(?, age),
-                gender = COALESCE(?, gender),
-                notes = COALESCE(?, notes)
-            WHERE id = ?
-        """, (name, dni, age, gender, notes, patient_id))
-        conn.commit()
-        ok = cursor.rowcount > 0
-        log.info(f"update_patient id={patient_id} -> {'OK' if ok else 'NO-OP'}")
-        return ok
-
-
-def delete_patient(patient_id, cascade=True):
-    """Elimina un paciente (y opcionalmente sus sesiones, métricas y movimiento)."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        try:
-            if cascade:
-                cursor.execute("""
-                    DELETE FROM metrics
-                    WHERE session_id IN (SELECT id FROM sessions WHERE patient_id = ?)
-                """, (patient_id,))
-                cursor.execute("""
-                    DELETE FROM movement_data
-                    WHERE session_id IN (SELECT id FROM sessions WHERE patient_id = ?)
-                """, (patient_id,))
-                cursor.execute("DELETE FROM sessions WHERE patient_id = ?", (patient_id,))
-
-            cursor.execute("DELETE FROM patients WHERE id = ?", (patient_id,))
-            conn.commit()
-            ok = cursor.rowcount > 0
-            log.info(f"delete_patient id={patient_id}, cascade={cascade} -> {'OK' if ok else 'NOT FOUND'}")
-            return ok
-
-        except sqlite3.Error:
-            log.exception(f"delete_patient FAILED id={patient_id}")
-            conn.rollback()
+        cur = conn.cursor()
+        
+        # Construir UPDATE dinámico
+        fields = []
+        values = []
+        
+        if name is not None:
+            fields.append("name = ?")
+            values.append(name)
+        if dni is not None:
+            fields.append("dni = ?")
+            values.append(dni)
+        if age is not None:
+            fields.append("age = ?")
+            values.append(age)
+        if gender is not None:
+            fields.append("gender = ?")
+            values.append(gender)
+        if notes is not None:
+            fields.append("notes = ?")
+            values.append(notes)
+        
+        if not fields:
             return False
+        
+        values.append(patient_id)
+        query = f"UPDATE patients SET {', '.join(fields)} WHERE id = ?"
+        
+        cur.execute(query, values)
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def delete_patient(patient_id: int, cascade: bool = True) -> bool:
+    """
+    Elimina un paciente.
+    
+    Args:
+        patient_id: ID del paciente
+        cascade: Si True, elimina también sus sesiones y datos asociados
+    
+    Returns:
+        True si se eliminó
+    """
+    with get_connection() as conn:
+        cur = conn.cursor()
+        
+        if cascade:
+            # Obtener sesiones del paciente
+            cur.execute("SELECT id FROM sessions WHERE patient_id = ?", (patient_id,))
+            session_ids = [row[0] for row in cur.fetchall()]
+            
+            # Eliminar datos asociados a cada sesión
+            for sid in session_ids:
+                cur.execute("DELETE FROM movement_data WHERE session_id = ?", (sid,))
+                cur.execute("DELETE FROM metrics WHERE session_id = ?", (sid,))
+            
+            # Eliminar sesiones
+            cur.execute("DELETE FROM sessions WHERE patient_id = ?", (patient_id,))
+        
+        # Eliminar paciente
+        cur.execute("DELETE FROM patients WHERE id = ?", (patient_id,))
+        conn.commit()
+        return cur.rowcount > 0
 
 
 # ============================================================
-# EXERCISES
+# EJERCICIOS
 # ============================================================
 
-def create_exercise(name, description=None):
-    """Crea un nuevo ejercicio."""
+def create_exercise(name: str, description: str | None = None) -> int:
+    """Crea un nuevo ejercicio (o retorna existente)."""
     with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT OR IGNORE INTO exercises (name, description)
-            VALUES (?, ?)
-        """, (name, description))
-        conn.commit()
-        eid = cursor.lastrowid
-        log.info(f"create_exercise OK: id={eid}")
-        return eid
-
-
-def get_all_exercises():
-    """Devuelve todos los ejercicios registrados."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT id, name, description FROM exercises")
-        return cursor.fetchall()
-
-
-def update_exercise(exercise_id, name=None, description=None):
-    """Actualiza un ejercicio existente."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE exercises
-            SET name = COALESCE(?, name),
-                description = COALESCE(?, description)
-            WHERE id = ?
-        """, (name, description, exercise_id))
-        conn.commit()
-        ok = cursor.rowcount > 0
-        log.info(f"update_exercise id={exercise_id} -> {'OK' if ok else 'NO-OP'}")
-        return ok
-
-
-def delete_exercise(exercise_id, cascade=True):
-    """Elimina un ejercicio y opcionalmente sus sesiones y métricas asociadas."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        try:
-            if cascade:
-                cursor.execute("""
-                    DELETE FROM metrics
-                    WHERE session_id IN (SELECT id FROM sessions WHERE exercise_id = ?)
-                """, (exercise_id,))
-                cursor.execute("""
-                    DELETE FROM movement_data
-                    WHERE session_id IN (SELECT id FROM sessions WHERE exercise_id = ?)
-                """, (exercise_id,))
-                cursor.execute("DELETE FROM sessions WHERE exercise_id = ?", (exercise_id,))
-
-            cursor.execute("DELETE FROM exercises WHERE id = ?", (exercise_id,))
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT OR IGNORE INTO exercises (name, description) VALUES (?, ?)",
+            (name, description)
+        )
+        if cur.lastrowid:
             conn.commit()
-            ok = cursor.rowcount > 0
-            log.info(f"delete_exercise id={exercise_id}, cascade={cascade} -> {'OK' if ok else 'NOT FOUND'}")
-            return ok
+            return cur.lastrowid
+        
+        # Si ya existía, obtener su ID
+        cur.execute("SELECT id FROM exercises WHERE name = ?", (name,))
+        row = cur.fetchone()
+        return row[0] if row else 0
 
-        except sqlite3.Error:
-            log.exception(f"delete_exercise FAILED id={exercise_id}")
-            conn.rollback()
+
+def get_all_exercises() -> List[Tuple]:
+    """
+    Obtiene todos los ejercicios.
+    
+    Returns:
+        Lista de tuplas: (id, name, description)
+    """
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id, name, description FROM exercises ORDER BY name")
+        return cur.fetchall()
+
+
+def update_exercise(exercise_id: int, name: str | None = None, description: str | None = None) -> bool:
+    """Actualiza un ejercicio."""
+    with get_connection() as conn:
+        cur = conn.cursor()
+        
+        fields = []
+        values = []
+        
+        if name is not None:
+            fields.append("name = ?")
+            values.append(name)
+        if description is not None:
+            fields.append("description = ?")
+            values.append(description)
+        
+        if not fields:
             return False
+        
+        values.append(exercise_id)
+        query = f"UPDATE exercises SET {', '.join(fields)} WHERE id = ?"
+        
+        cur.execute(query, values)
+        conn.commit()
+        return cur.rowcount > 0
 
 
-# ============================================================
-# SESSIONS
-# ============================================================
-
-def create_session(patient_id, exercise_id=None, video_path=None, notes=None):
-    """Crea una nueva sesión de análisis."""
+def delete_exercise(exercise_id: int, cascade: bool = True) -> bool:
+    """Elimina un ejercicio (y opcionalmente sus sesiones)."""
     with get_connection() as conn:
-        cursor = conn.cursor()
-        try:
-            cursor.execute("""
-                INSERT INTO sessions (patient_id, exercise_id, video_path, notes)
-                VALUES (?, ?, ?, ?)
-            """, (patient_id, exercise_id, video_path, notes))
-            conn.commit()
-            sid = cursor.lastrowid
-            log.info(f"create_session OK: session_id={sid}")
-            return sid
-        except Exception:
-            log.exception("create_session FAILED")
-            conn.rollback()
-            raise
+        cur = conn.cursor()
+        
+        if cascade:
+            cur.execute("SELECT id FROM sessions WHERE exercise_id = ?", (exercise_id,))
+            session_ids = [row[0] for row in cur.fetchall()]
+            
+            for sid in session_ids:
+                cur.execute("DELETE FROM movement_data WHERE session_id = ?", (sid,))
+                cur.execute("DELETE FROM metrics WHERE session_id = ?", (sid,))
+            
+            cur.execute("DELETE FROM sessions WHERE exercise_id = ?", (exercise_id,))
+        
+        cur.execute("DELETE FROM exercises WHERE id = ?", (exercise_id,))
+        conn.commit()
+        return cur.rowcount > 0
 
 
-def get_all_sessions():
-    """Devuelve todas las sesiones registradas."""
+# ============================================================
+# SESIONES
+# ============================================================
+
+def create_session(
+    patient_id: int | None = None,
+    exercise_id: int | None = None,
+    video_path_raw: str | None = None,
+    video_path_mediapipe: str | None = None,
+    video_path_legacy: str | None = None,
+    notes: str | None = None
+) -> int:
+    """
+    Crea una nueva sesión de análisis.
+    
+    Args:
+        patient_id: ID del paciente
+        exercise_id: ID del ejercicio
+        video_path_raw: Ruta al vídeo sin procesar (opcional)
+        video_path_mediapipe: Ruta al vídeo con overlay MediaPipe (opcional)
+        video_path_legacy: Ruta al vídeo con overlay clínico (opcional)
+        notes: Notas clínicas
+    
+    Returns:
+        ID de la sesión creada
+    """
+    with get_connection() as conn:
+        cur = conn.cursor()
+        
+        # video_path legacy: apunta al vídeo principal (preferencia: legacy > mediapipe > raw)
+        video_path = video_path_legacy or video_path_mediapipe or video_path_raw
+        
+        cur.execute(
+            """
+            INSERT INTO sessions (
+                patient_id, exercise_id, 
+                video_path_raw, video_path_mediapipe, video_path_legacy,
+                video_path, notes
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (patient_id, exercise_id, 
+             video_path_raw, video_path_mediapipe, video_path_legacy,
+             video_path, notes)
+        )
+        conn.commit()
+        return cur.lastrowid
+
+
+def get_all_sessions() -> List[Dict[str, Any]]:
+    """
+    Obtiene todas las sesiones con datos relacionados.
+    
+    Returns:
+        Lista de diccionarios con datos de sesión + paciente + ejercicio + rutas de vídeo
+    """
     with get_connection() as conn:
         conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        cursor.execute("""
+        cur = conn.cursor()
+        cur.execute(
+            """
             SELECT 
                 s.id,
                 s.timestamp AS datetime,
-                p.name AS patient_name,
-                e.name AS exercise_name,
                 s.video_path,
-                s.notes
+                s.video_path_raw,
+                s.video_path_mediapipe,
+                s.video_path_legacy,
+                s.notes,
+                p.name AS patient_name,
+                e.name AS exercise_name
             FROM sessions s
             LEFT JOIN patients p ON s.patient_id = p.id
             LEFT JOIN exercises e ON s.exercise_id = e.id
             ORDER BY s.timestamp DESC
-        """)
-        return [dict(row) for row in cursor.fetchall()]
+            """
+        )
+        return [dict(row) for row in cur.fetchall()]
 
 
-def get_sessions_by_patient(patient_id):
-    """Devuelve todas las sesiones de un paciente."""
+def get_sessions_by_patient(patient_id: int) -> List[Dict[str, Any]]:
+    """
+    Obtiene sesiones de un paciente específico.
+    
+    Returns:
+        Lista de diccionarios con datos de sesión + ejercicio + rutas de vídeo
+    """
     with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT s.id, s.timestamp, e.name AS exercise_name, s.video_path, s.notes
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT 
+                s.id,
+                s.timestamp AS datetime,
+                s.video_path,
+                s.video_path_raw,
+                s.video_path_mediapipe,
+                s.video_path_legacy,
+                s.notes,
+                e.name AS exercise_name
             FROM sessions s
             LEFT JOIN exercises e ON s.exercise_id = e.id
             WHERE s.patient_id = ?
             ORDER BY s.timestamp DESC
-        """, (patient_id,))
-        return cursor.fetchall()
+            """,
+            (patient_id,)
+        )
+        return [dict(row) for row in cur.fetchall()]
 
 
-def delete_session(session_id):
-    """Elimina una sesión y todos sus datos asociados (métricas, movimiento, etc.)."""
+def delete_session(session_id: int) -> bool:
+    """Elimina una sesión y todos sus datos asociados (cascade)."""
     with get_connection() as conn:
-        cursor = conn.cursor()
-        try:
-            cursor.execute("DELETE FROM metrics WHERE session_id = ?", (session_id,))
-            cursor.execute("DELETE FROM movement_data WHERE session_id = ?", (session_id,))
-            cursor.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
-            deleted_sessions = cursor.rowcount
-            conn.commit()
-            ok = deleted_sessions > 0
-            log.info(f"delete_session id={session_id} -> {'OK' if ok else 'NOT FOUND'}")
-            return ok
-        except sqlite3.Error:
-            log.exception(f"delete_session FAILED id={session_id}")
-            conn.rollback()
-            return False
+        cur = conn.cursor()
+        
+        # Eliminar datos de movimiento
+        cur.execute("DELETE FROM movement_data WHERE session_id = ?", (session_id,))
+        
+        # Eliminar métricas
+        cur.execute("DELETE FROM metrics WHERE session_id = ?", (session_id,))
+        
+        # Eliminar sesión
+        cur.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+        
+        conn.commit()
+        return cur.rowcount > 0
 
 
 # ============================================================
-# MOVEMENT DATA
+# MOVEMENT DATA (con columnas dinámicas)
 # ============================================================
 
-def add_movement_data(session_id, data: dict):
-    """Guarda un frame de datos de movimiento."""
+def add_movement_data(session_id: int, data: Dict[str, Any]) -> None:
+    """
+    Inserta datos de movimiento por frame con columnas dinámicas.
+    
+    OPTIMIZADO: Construye INSERT dinámico basado en las keys del dict.
+    Soporta cualquier número de columnas (posiciones, ángulos, simetrías, etc.)
+    
+    Args:
+        session_id: ID de la sesión
+        data: Diccionario con datos del frame
+              Ej: {"time_seconds": 1.5, "frame": 45, "angle_arm_r": 120.5, 
+                   "symmetry_shoulder_y": 5.2, ...}
+    
+    Raises:
+        sqlite3.Error: Si falla la inserción
+    """
     if not data:
-        log.warning(f"add_movement_data: empty payload for session_id={session_id}")
         return
-
-    columns = ["session_id"] + list(data.keys())
-    placeholders = ", ".join("?" * len(columns))
-    values = [session_id] + list(data.values())
-
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        try:
-            cursor.execute(f"""
-                INSERT INTO movement_data ({", ".join(columns)})
-                VALUES ({placeholders})
-            """, values)
-            conn.commit()
-        except Exception:
-            log.exception(f"add_movement_data FAILED (session={session_id})")
-            conn.rollback()
-            raise
-
-
-def get_movement_data_by_session(session_id):
-    """Obtiene todos los frames de movimiento de una sesión."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT * FROM movement_data
-            WHERE session_id = ?
-            ORDER BY frame ASC
-        """, (session_id,))
-        return cursor.fetchall()
-
-
-# ============================================================
-# METRICS
-# ============================================================
-
-def add_metric(session_id, metric_name, metric_value, unit=None):
+    
+    # Añadir session_id al diccionario
+    data["session_id"] = session_id
+    
+    # Construir INSERT dinámico
+    columns = list(data.keys())
+    placeholders = ["?" for _ in columns]
+    values = [data[col] for col in columns]
+    
+    query = f"""
+        INSERT INTO movement_data ({', '.join(columns)})
+        VALUES ({', '.join(placeholders)})
     """
-    Agrega una métrica a una sesión (con conversión robusta).
+    
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(query, values)
+        conn.commit()
+
+
+def get_movement_data_by_session(session_id: int) -> List[Dict[str, Any]]:
     """
-    mv = None
-    if metric_value is not None:
-        try:
-            mv = float(metric_value)
-        except (TypeError, ValueError):
-            mv = None
-
+    Obtiene todos los datos de movimiento de una sesión.
+    
+    Returns:
+        Lista de diccionarios con todos los campos almacenados
+    """
     with get_connection() as conn:
-        cursor = conn.cursor()
-        try:
-            cursor.execute("""
-                INSERT INTO metrics (session_id, metric_name, metric_value, unit)
-                VALUES (?, ?, ?, ?)
-            """, (session_id, metric_name, mv, unit))
-            conn.commit()
-        except Exception:
-            log.exception(f"add_metric FAILED: sid={session_id}, name={metric_name}")
-            conn.rollback()
-            raise
-
-
-def get_metrics_by_session(session_id):
-    """Devuelve las métricas asociadas a una sesión."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT metric_name, metric_value, unit
-            FROM metrics
-            WHERE session_id = ?
-        """, (session_id,))
-        return cursor.fetchall()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT * FROM movement_data WHERE session_id = ? ORDER BY frame",
+            (session_id,)
+        )
+        return [dict(row) for row in cur.fetchall()]
 
 
 # ============================================================
-# UTILITIES
+# MÉTRICAS
 # ============================================================
 
-def get_table_counts():
-    """Devuelve el número de registros en cada tabla principal."""
-    tables = ["patients", "exercises", "sessions", "movement_data", "metrics"]
+def add_metric(
+    session_id: int,
+    metric_name: str,
+    metric_value: float,
+    unit: str | None = None
+) -> None:
+    """
+    Añade una métrica agregada a una sesión.
+    
+    Args:
+        session_id: ID de la sesión
+        metric_name: Nombre de la métrica (ej: "angle_arm_r_max", "symmetry_shoulder_y_min")
+        metric_value: Valor numérico
+        unit: Unidad de medida ("degrees", "pixels", etc.)
+    """
     with get_connection() as conn:
-        cursor = conn.cursor()
-        return {
-            t: cursor.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
-            for t in tables
-        }
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO metrics (session_id, metric_name, metric_value, unit)
+            VALUES (?, ?, ?, ?)
+            """,
+            (session_id, metric_name, metric_value, unit)
+        )
+        conn.commit()
+
+
+def get_metrics_by_session(session_id: int) -> List[Tuple[str, float, str]]:
+    """
+    Obtiene todas las métricas de una sesión.
+    
+    Returns:
+        Lista de tuplas: (metric_name, metric_value, unit)
+    """
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT metric_name, metric_value, unit FROM metrics WHERE session_id = ? ORDER BY metric_name",
+            (session_id,)
+        )
+        return cur.fetchall()
+
+
+# ============================================================
+# UTILIDADES
+# ============================================================
+
+def get_table_counts() -> Dict[str, int]:
+    """
+    Obtiene conteos de registros en tablas principales.
+    
+    Returns:
+        Diccionario con conteos: {"patients": X, "exercises": Y, ...}
+    """
+    with get_connection() as conn:
+        cur = conn.cursor()
+        
+        counts = {}
+        for table in ["patients", "exercises", "sessions", "metrics"]:
+            cur.execute(f"SELECT COUNT(*) FROM {table}")
+            counts[table] = cur.fetchone()[0]
+        
+        return counts
