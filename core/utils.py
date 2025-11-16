@@ -1,5 +1,4 @@
 import os
-import time
 import datetime
 
 
@@ -20,22 +19,6 @@ def timestamp():
     """
     return datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
-
-def current_time_seconds():
-    """
-    Devuelve el tiempo actual en segundos (float), útil para medidas de duración.
-    """
-    return time.time()
-
-
-def elapsed_time(start_time):
-    """
-    Devuelve el tiempo transcurrido desde `start_time` en segundos (float).
-    """
-    return round(time.time() - start_time, 2)
-
-
-
 def log_info(message):
     print(f"[INFO] {message}")
 
@@ -44,14 +27,6 @@ def log_warn(message):
 
 def log_error(message):
     print(f"[ERROR] {message}")
-
-
-
-def clamp(value, min_value, max_value):
-    """
-    Restringe un valor dentro del rango [min_value, max_value].
-    """
-    return max(min(value, max_value), min_value)
 
 
 def safe_round(value, decimals=2):

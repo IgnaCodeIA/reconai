@@ -1,4 +1,3 @@
-from db.crud import create_patient, create_exercise
-pid = create_patient("Prueba", 30, "M", "Sesión demo")
-eid = create_exercise("Flexión de rodilla", "Movimiento base")
-print(pid, eid)
+from db import crud
+crud.create_patient("Paciente de prueba", dni="00000000A", age=30, gender="M", notes="Demo")
+crud.create_exercise("Flexión de rodilla", "Prueba base de movimiento")

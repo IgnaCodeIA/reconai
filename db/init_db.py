@@ -1,41 +1,51 @@
 """
-Inicializa la base de datos SQLite local de Recon IA.
-Crea el archivo y las tablas necesarias si no existen.
+Initialize the local SQLite database for Recon IA.
+Creates the database file and all required tables if they do not already exist.
 """
 
 import os
 import sqlite3
 from db import models
 
+# ============================================================
+# DATABASE CONFIGURATION
+# ============================================================
 
-DB_PATH = os.path.join("data", "sessions.db")
+# Ruta ABSOLUTA, compartida por UI y worker WebRTC
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+DB_PATH = os.path.join(PROJECT_ROOT, "data", "sessions.db")
 
 
 def get_connection():
     """
-    Devuelve una conexión SQLite a la base de datos local.
-    Crea la carpeta y el archivo si no existen.
+    Return a SQLite3 connection to the local database.
+    Ensures that the database directory exists and foreign key constraints are enabled.
     """
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("PRAGMA foreign_keys = ON;")  # Habilita claves foráneas
+    # check_same_thread=False para hilos (webrtc) y WAL para concurrencia
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.execute("PRAGMA foreign_keys = ON;")
+    conn.execute("PRAGMA journal_mode = WAL;")
     return conn
 
 
 def init_database():
     """
-    Crea todas las tablas definidas en db/models.py.
-    Si la base de datos ya existe, se asegura de que las tablas estén disponibles.
+    Initialize the Recon IA local database.
+    Creates all tables defined in db/models.py if they do not exist.
     """
     conn = get_connection()
-    cursor = conn.cursor()
-
-    for table_sql in models.TABLES:
-        cursor.execute(table_sql)
-
-    conn.commit()
-    conn.close()
-    print(f"[init_db] Base de datos inicializada en: {DB_PATH}")
+    try:
+        cursor = conn.cursor()
+        for table_sql in models.TABLES:
+            cursor.execute(table_sql)
+        conn.commit()
+        print(f"[init_db] Database successfully initialized at: {DB_PATH}")
+    except sqlite3.Error as e:
+        print(f"[init_db] SQLite error during initialization: {e}")
+        raise
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":

@@ -67,3 +67,7 @@ coverage.xml
 # ---- Documentación generada ----
 docs/_build/
 site/
+
+*.mp4
+*.pdf
+*.png
