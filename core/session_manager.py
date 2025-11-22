@@ -3,6 +3,8 @@ import os
 import time
 import math
 import cv2
+import subprocess
+import numpy as np
 from typing import Dict, List, Tuple
 
 from core.utils import ensure_dir, timestamp
@@ -24,6 +26,8 @@ class SessionManager:
     - Sampling rate configurable para reducir volumen de datos
     - Métricas de simetría bilateral con unidades diferenciadas
     - Contador de secuencia visible en los 3 tipos de vídeo
+    - FFmpeg para máxima calidad de vídeo (bitrate alto)
+    - FPS adaptativo para evitar aceleración
     """
 
     def __init__(
@@ -38,13 +42,21 @@ class SessionManager:
         generate_raw: bool = False,
         generate_mediapipe: bool = False,
         generate_legacy: bool = True,
+        # NUEVO: Control de calidad de video
+        use_ffmpeg: bool = True,  # Usar FFmpeg para máxima calidad
+        video_bitrate: str = "8000k",  # Bitrate muy alto para calidad profesional
     ):
         self.output_dir = ensure_dir(output_dir)
         
-        # NUEVO: 3 VideoWriters (uno por cada versión)
+        # NUEVO: 3 VideoWriters (uno por cada versión) O FFmpeg pipes
         self.video_writer_raw: cv2.VideoWriter | None = None
         self.video_writer_mediapipe: cv2.VideoWriter | None = None
         self.video_writer_legacy: cv2.VideoWriter | None = None
+        
+        # FFmpeg processes (alternativa de alta calidad)
+        self.ffmpeg_raw = None
+        self.ffmpeg_mediapipe = None
+        self.ffmpeg_legacy = None
         
         self.start_time: float | None = None
         self.frame_size: tuple[int, int] | None = None
@@ -78,75 +90,197 @@ class SessionManager:
         self.generate_raw = generate_raw
         self.generate_mediapipe = generate_mediapipe
         self.generate_legacy = generate_legacy
+        
+        # NUEVO: Control de calidad
+        self.use_ffmpeg = use_ffmpeg
+        self.video_bitrate = video_bitrate
 
         log.info(
             "SessionManager created base_name=%s, patient=%s, exercise=%s, sampling_rate=%s, "
-            "versions=(raw=%s, mediapipe=%s, legacy=%s)",
+            "versions=(raw=%s, mediapipe=%s, legacy=%s), use_ffmpeg=%s, bitrate=%s",
             self.base_name, self.patient_id, self.exercise_id, self.sampling_rate,
-            self.generate_raw, self.generate_mediapipe, self.generate_legacy
+            self.generate_raw, self.generate_mediapipe, self.generate_legacy,
+            self.use_ffmpeg, self.video_bitrate
         )
 
     # ============================================================
     # INICIALIZACIÓN
     # ============================================================
 
+    def _create_ffmpeg_writer(self, output_path: str, width: int, height: int, fps: int):
+        """
+        Crea un proceso FFmpeg para escribir video con máxima calidad.
+        
+        Args:
+            output_path: Ruta del archivo de salida
+            width: Ancho del video
+            height: Alto del video
+            fps: Frames por segundo
+        
+        Returns:
+            Proceso de FFmpeg o None si falla
+        """
+        try:
+            # Comando FFmpeg con máxima calidad
+            cmd = [
+                'ffmpeg',
+                '-y',  # Sobrescribir archivo si existe
+                '-f', 'rawvideo',
+                '-vcodec', 'rawvideo',
+                '-s', f'{width}x{height}',
+                '-pix_fmt', 'bgr24',
+                '-r', str(fps),
+                '-i', '-',  # Entrada desde pipe
+                '-an',  # Sin audio
+                '-vcodec', 'libx264',  # Codec H.264
+                '-preset', 'medium',  # Balance calidad/velocidad
+                '-crf', '18',  # Calidad muy alta (0-51, menor=mejor, 18=visualmente sin pérdida)
+                '-b:v', self.video_bitrate,  # Bitrate explícito
+                '-pix_fmt', 'yuv420p',  # Compatibilidad
+                '-movflags', '+faststart',  # Streaming optimizado
+                output_path
+            ]
+            
+            process = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE
+            )
+            
+            log.info(f"FFmpeg writer creado: {output_path} ({width}x{height} @ {fps}fps, bitrate={self.video_bitrate}, CRF=18)")
+            return process
+            
+        except FileNotFoundError:
+            log.warning("FFmpeg no está instalado, usando OpenCV VideoWriter")
+            return None
+        except Exception as e:
+            log.error(f"Error creando FFmpeg writer: {e}")
+            return None
+
     def start_session(self, width: int, height: int, fps: float | int) -> int:
         """
         Crea writers de vídeo (hasta 3 según configuración) y la fila de sesión en BD.
+        
+        NUEVO: Usa FFmpeg con CRF=18 y bitrate alto para máxima calidad.
         
         Returns:
             session_id
         """
         self.frame_size = (width, height)
-        self.fps = int(round(fps)) if fps else 30
+        self.fps = int(round(fps)) if fps else 20
         self.start_time = time.time()
         self.sequence_counter = 0  # Reset contador
 
         ts = timestamp()
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        
+        log.info(f"Iniciando sesión con resolución {width}x{height} @ {self.fps}fps")
         
         # ============================================================
-        # CREAR VIDEOWRITERS SEGÚN CONFIGURACIÓN
+        # CREAR WRITERS SEGÚN CONFIGURACIÓN (FFmpeg o OpenCV)
         # ============================================================
         
-        # 1. RAW (sin procesar)
-        if self.generate_raw:
-            self.video_path_raw = os.path.join(
-                self.output_dir, f"{self.base_name}_raw_{width}x{height}_{self.fps}_{ts}.mp4"
-            )
-            self.video_writer_raw = cv2.VideoWriter(
-                self.video_path_raw, fourcc, self.fps, self.frame_size
-            )
-            if not self.video_writer_raw or not self.video_writer_raw.isOpened():
-                log.warning("VideoWriter RAW no está abierto tras start_session()")
-            else:
-                log.info("VideoWriter RAW creado: %s", self.video_path_raw)
+        if self.use_ffmpeg:
+            log.info("Usando FFmpeg para máxima calidad (CRF=18, bitrate=%s)", self.video_bitrate)
+            
+            # 1. RAW (sin procesar) con FFmpeg
+            if self.generate_raw:
+                self.video_path_raw = os.path.join(
+                    self.output_dir, f"{self.base_name}_raw_{width}x{height}_{self.fps}fps_{ts}.mp4"
+                )
+                self.ffmpeg_raw = self._create_ffmpeg_writer(self.video_path_raw, width, height, self.fps)
+                if self.ffmpeg_raw:
+                    log.info("FFmpeg RAW writer creado: %s", self.video_path_raw)
+            
+            # 2. MEDIAPIPE con FFmpeg
+            if self.generate_mediapipe:
+                self.video_path_mediapipe = os.path.join(
+                    self.output_dir, f"{self.base_name}_mediapipe_{width}x{height}_{self.fps}fps_{ts}.mp4"
+                )
+                self.ffmpeg_mediapipe = self._create_ffmpeg_writer(self.video_path_mediapipe, width, height, self.fps)
+                if self.ffmpeg_mediapipe:
+                    log.info("FFmpeg MEDIAPIPE writer creado: %s", self.video_path_mediapipe)
+            
+            # 3. LEGACY con FFmpeg
+            if self.generate_legacy:
+                self.video_path_legacy = os.path.join(
+                    self.output_dir, f"{self.base_name}_legacy_{width}x{height}_{self.fps}fps_{ts}.mp4"
+                )
+                self.ffmpeg_legacy = self._create_ffmpeg_writer(self.video_path_legacy, width, height, self.fps)
+                if self.ffmpeg_legacy:
+                    log.info("FFmpeg LEGACY writer creado: %s", self.video_path_legacy)
         
-        # 2. MEDIAPIPE (overlay completo MediaPipe)
-        if self.generate_mediapipe:
-            self.video_path_mediapipe = os.path.join(
-                self.output_dir, f"{self.base_name}_mediapipe_{width}x{height}_{self.fps}_{ts}.mp4"
-            )
-            self.video_writer_mediapipe = cv2.VideoWriter(
-                self.video_path_mediapipe, fourcc, self.fps, self.frame_size
-            )
-            if not self.video_writer_mediapipe or not self.video_writer_mediapipe.isOpened():
-                log.warning("VideoWriter MEDIAPIPE no está abierto tras start_session()")
-            else:
-                log.info("VideoWriter MEDIAPIPE creado: %s", self.video_path_mediapipe)
-        
-        # 3. LEGACY (overlay clínico personalizado)
-        if self.generate_legacy:
-            self.video_path_legacy = os.path.join(
-                self.output_dir, f"{self.base_name}_legacy_{width}x{height}_{self.fps}_{ts}.mp4"
-            )
-            self.video_writer_legacy = cv2.VideoWriter(
-                self.video_path_legacy, fourcc, self.fps, self.frame_size
-            )
-            if not self.video_writer_legacy or not self.video_writer_legacy.isOpened():
-                log.warning("VideoWriter LEGACY no está abierto tras start_session()")
-            else:
-                log.info("VideoWriter LEGACY creado: %s", self.video_path_legacy)
+        else:
+            # Fallback a OpenCV VideoWriter con mejor codec
+            log.info("Usando OpenCV VideoWriter (calidad limitada)")
+            
+            # Intentar varios codecs en orden de preferencia
+            fourcc_options = [
+                ('H264', cv2.VideoWriter_fourcc(*'H264')),  # Mejor opción
+                ('X264', cv2.VideoWriter_fourcc(*'X264')),  # Segunda opción
+                ('avc1', cv2.VideoWriter_fourcc(*'avc1')),  # H.264 alternativo
+                ('mp4v', cv2.VideoWriter_fourcc(*'mp4v')),  # Fallback básico
+            ]
+            
+            fourcc = None
+            for codec_name, codec_fourcc in fourcc_options:
+                try:
+                    # Test con writer temporal
+                    test_writer = cv2.VideoWriter(
+                        'test.mp4', codec_fourcc, self.fps, self.frame_size
+                    )
+                    if test_writer.isOpened():
+                        fourcc = codec_fourcc
+                        log.info(f"Usando codec: {codec_name}")
+                        test_writer.release()
+                        if os.path.exists('test.mp4'):
+                            os.remove('test.mp4')
+                        break
+                except Exception:
+                    continue
+            
+            if fourcc is None:
+                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                log.warning("Usando codec mp4v (baja calidad)")
+            
+            # 1. RAW (sin procesar)
+            if self.generate_raw:
+                self.video_path_raw = os.path.join(
+                    self.output_dir, f"{self.base_name}_raw_{width}x{height}_{self.fps}fps_{ts}.mp4"
+                )
+                self.video_writer_raw = cv2.VideoWriter(
+                    self.video_path_raw, fourcc, self.fps, self.frame_size
+                )
+                if not self.video_writer_raw or not self.video_writer_raw.isOpened():
+                    log.warning("VideoWriter RAW no está abierto")
+                else:
+                    log.info("OpenCV RAW writer creado: %s", self.video_path_raw)
+            
+            # 2. MEDIAPIPE
+            if self.generate_mediapipe:
+                self.video_path_mediapipe = os.path.join(
+                    self.output_dir, f"{self.base_name}_mediapipe_{width}x{height}_{self.fps}fps_{ts}.mp4"
+                )
+                self.video_writer_mediapipe = cv2.VideoWriter(
+                    self.video_path_mediapipe, fourcc, self.fps, self.frame_size
+                )
+                if not self.video_writer_mediapipe or not self.video_writer_mediapipe.isOpened():
+                    log.warning("VideoWriter MEDIAPIPE no está abierto")
+                else:
+                    log.info("OpenCV MEDIAPIPE writer creado: %s", self.video_path_mediapipe)
+            
+            # 3. LEGACY
+            if self.generate_legacy:
+                self.video_path_legacy = os.path.join(
+                    self.output_dir, f"{self.base_name}_legacy_{width}x{height}_{self.fps}fps_{ts}.mp4"
+                )
+                self.video_writer_legacy = cv2.VideoWriter(
+                    self.video_path_legacy, fourcc, self.fps, self.frame_size
+                )
+                if not self.video_writer_legacy or not self.video_writer_legacy.isOpened():
+                    log.warning("VideoWriter LEGACY no está abierto")
+                else:
+                    log.info("OpenCV LEGACY writer creado: %s", self.video_path_legacy)
 
         # ============================================================
         # CREAR FILA EN BD
@@ -245,7 +379,7 @@ class SessionManager:
         frame_legacy=None
     ) -> None:
         """
-        Escribe frames a los vídeos de salida (según qué versiones estén activas).
+        Escribe frames a los vídeos de salida (FFmpeg o OpenCV según configuración).
         Incrementa el contador de secuencia.
         
         Args:
@@ -253,14 +387,36 @@ class SessionManager:
             frame_mediapipe: Frame con overlay MediaPipe completo
             frame_legacy: Frame con overlay clínico personalizado
         """
-        if self.video_writer_raw and frame_raw is not None:
-            self.video_writer_raw.write(frame_raw)
+        # Escritura con FFmpeg (alta calidad)
+        if self.use_ffmpeg:
+            if self.ffmpeg_raw and frame_raw is not None:
+                try:
+                    self.ffmpeg_raw.stdin.write(frame_raw.tobytes())
+                except Exception as e:
+                    log.error(f"Error escribiendo frame RAW a FFmpeg: {e}")
+            
+            if self.ffmpeg_mediapipe and frame_mediapipe is not None:
+                try:
+                    self.ffmpeg_mediapipe.stdin.write(frame_mediapipe.tobytes())
+                except Exception as e:
+                    log.error(f"Error escribiendo frame MEDIAPIPE a FFmpeg: {e}")
+            
+            if self.ffmpeg_legacy and frame_legacy is not None:
+                try:
+                    self.ffmpeg_legacy.stdin.write(frame_legacy.tobytes())
+                except Exception as e:
+                    log.error(f"Error escribiendo frame LEGACY a FFmpeg: {e}")
         
-        if self.video_writer_mediapipe and frame_mediapipe is not None:
-            self.video_writer_mediapipe.write(frame_mediapipe)
-        
-        if self.video_writer_legacy and frame_legacy is not None:
-            self.video_writer_legacy.write(frame_legacy)
+        # Escritura con OpenCV VideoWriter
+        else:
+            if self.video_writer_raw and frame_raw is not None:
+                self.video_writer_raw.write(frame_raw)
+            
+            if self.video_writer_mediapipe and frame_mediapipe is not None:
+                self.video_writer_mediapipe.write(frame_mediapipe)
+            
+            if self.video_writer_legacy and frame_legacy is not None:
+                self.video_writer_legacy.write(frame_legacy)
         
         self._frames_written += 1
         self.sequence_counter += 1  # Incrementar contador de secuencia
@@ -292,27 +448,54 @@ class SessionManager:
             self.sampling_rate, self.sequence_counter
         )
 
-        # Cerrar los 3 writers
-        if self.video_writer_raw:
-            try:
-                self.video_writer_raw.release()
-                log.info("VideoWriter RAW cerrado")
-            except Exception:
-                log.exception("close_session: video_writer_raw.release() FAILED")
+        # Cerrar FFmpeg processes
+        if self.use_ffmpeg:
+            if self.ffmpeg_raw:
+                try:
+                    self.ffmpeg_raw.stdin.close()
+                    self.ffmpeg_raw.wait(timeout=10)
+                    log.info("FFmpeg RAW cerrado")
+                except Exception as e:
+                    log.exception(f"Error cerrando FFmpeg RAW: {e}")
+            
+            if self.ffmpeg_mediapipe:
+                try:
+                    self.ffmpeg_mediapipe.stdin.close()
+                    self.ffmpeg_mediapipe.wait(timeout=10)
+                    log.info("FFmpeg MEDIAPIPE cerrado")
+                except Exception as e:
+                    log.exception(f"Error cerrando FFmpeg MEDIAPIPE: {e}")
+            
+            if self.ffmpeg_legacy:
+                try:
+                    self.ffmpeg_legacy.stdin.close()
+                    self.ffmpeg_legacy.wait(timeout=10)
+                    log.info("FFmpeg LEGACY cerrado")
+                except Exception as e:
+                    log.exception(f"Error cerrando FFmpeg LEGACY: {e}")
         
-        if self.video_writer_mediapipe:
-            try:
-                self.video_writer_mediapipe.release()
-                log.info("VideoWriter MEDIAPIPE cerrado")
-            except Exception:
-                log.exception("close_session: video_writer_mediapipe.release() FAILED")
-        
-        if self.video_writer_legacy:
-            try:
-                self.video_writer_legacy.release()
-                log.info("VideoWriter LEGACY cerrado")
-            except Exception:
-                log.exception("close_session: video_writer_legacy.release() FAILED")
+        # Cerrar OpenCV VideoWriters
+        else:
+            if self.video_writer_raw:
+                try:
+                    self.video_writer_raw.release()
+                    log.info("VideoWriter RAW cerrado")
+                except Exception:
+                    log.exception("close_session: video_writer_raw.release() FAILED")
+            
+            if self.video_writer_mediapipe:
+                try:
+                    self.video_writer_mediapipe.release()
+                    log.info("VideoWriter MEDIAPIPE cerrado")
+                except Exception:
+                    log.exception("close_session: video_writer_mediapipe.release() FAILED")
+            
+            if self.video_writer_legacy:
+                try:
+                    self.video_writer_legacy.release()
+                    log.info("VideoWriter LEGACY cerrado")
+                except Exception:
+                    log.exception("close_session: video_writer_legacy.release() FAILED")
 
         if not self.session_id:
             log.warning("close_session: session_id is None (no se guardarán métricas).")

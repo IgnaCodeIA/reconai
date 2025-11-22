@@ -2,6 +2,7 @@
 import os
 import tempfile
 import datetime
+import time
 import cv2
 import numpy as np
 import streamlit as st
@@ -26,6 +27,13 @@ try:
 except Exception:
     _WEBRTC_OK = False
 
+
+# ============================================================
+# CONFIGURACIÓN DE FPS
+# ============================================================
+# FPS realista para captura y procesamiento
+# 20fps permite procesamiento estable sin pérdida de calidad
+TARGET_FPS = 20
 
 # -----------------------------
 # UTILIDADES DE DIBUJO
@@ -203,8 +211,8 @@ def _extract_joint_data(lm, w, h):
 # ============================================================
 class Processor(VideoProcessorBase):
     """
-    Procesador de vídeo para streamlit-webrtc con soporte para 3 versiones de salida
-    y contador de secuencia visible.
+    Procesador de vídeo para streamlit-webrtc con soporte para 3 versiones de salida,
+    contador de secuencia visible y FPS controlado para evitar aceleración.
     """
     
     def __init__(self, patient_id, exercise_id, notes, sampling_rate=0.0,
@@ -222,8 +230,8 @@ class Processor(VideoProcessorBase):
         self.frame_idx = 0
         self.started = False
 
-    def _ensure_session(self, w: int, h: int, fps_hint: int = 30):
-        """Inicializa la sesión en el primer frame."""
+    def _ensure_session(self, w: int, h: int, fps_hint: int = TARGET_FPS):
+        """Inicializa la sesión en el primer frame con FPS realista."""
         if not self.started:
             self.session_mgr = SessionManager(
                 output_dir="data/exports",
@@ -238,15 +246,15 @@ class Processor(VideoProcessorBase):
             )
             self.sid = self.session_mgr.start_session(w, h, fps_hint)
             self.started = True
-            print(f"✅ Sesión iniciada: ID={self.sid}")
+            print(f"✅ Sesión iniciada: ID={self.sid} @ {fps_hint}fps")
 
     def recv(self, frame: "av.VideoFrame") -> "av.VideoFrame":
         """Procesa cada frame del stream de vídeo y genera las 3 versiones."""
         img_bgr = frame.to_ndarray(format="bgr24")
         h, w = img_bgr.shape[:2]
 
-        # Sesión al primer frame
-        self._ensure_session(w, h, fps_hint=30)
+        # Sesión al primer frame con FPS realista
+        self._ensure_session(w, h, fps_hint=TARGET_FPS)
 
         # Obtener número de secuencia ANTES de escribir
         sequence_num = self.session_mgr.get_sequence_counter()
@@ -461,6 +469,8 @@ def app():
                 sampling_rate = st.slider("Segundos entre muestras", 0.1, 1.0, 0.2, 0.05)
             else:
                 sampling_rate = 0.0
+            
+            st.info(f"ℹ️ Los videos se grabarán a {TARGET_FPS} fps para óptima calidad y velocidad correcta")
 
         if source_mode == "Webcam (WebRTC)" and not _WEBRTC_OK:
             st.info("Para usar la webcam en el navegador: `pip install streamlit-webrtc av`")
@@ -493,23 +503,69 @@ def app():
             st.error("streamlit-webrtc no está instalado.")
             return
 
-        st.subheader("Grabación con webcam (en vivo)")
+        st.subheader("📹 Grabación con webcam (en vivo)")
         
         # Mostrar versiones activas
         versions = []
         if st.session_state.get("generate_raw"): versions.append("RAW")
         if st.session_state.get("generate_mediapipe"): versions.append("⚪ MediaPipe (fondo blanco)")
         if st.session_state.get("generate_legacy"): versions.append("Clínico")
-        st.info(f"📹 Generando versiones: {', '.join(versions)}")
+        st.info(f"🎬 Generando versiones: {', '.join(versions)} @ {TARGET_FPS}fps")
         
-        ctrl_cols = st.columns([1, 1, 3])
+        # ============================================================
+        # OCULTAR BOTONES NATIVOS DE STREAMLIT-WEBRTC CON CSS
+        # ============================================================
+        st.markdown("""
+        <style>
+        /* Ocultar botones nativos de streamlit-webrtc */
+        button[kind="header"] {
+            display: none !important;
+        }
+        div[data-testid="stToolbar"] {
+            display: none !important;
+        }
+        /* Ocultar el botón Start y Select device */
+        .streamlit-webrtc-controls {
+            display: none !important;
+        }
+        /* Ocultar controles de video nativos */
+        div.css-1n76uvr, div.css-12oz5g7 {
+            display: none !important;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        
+        # ============================================================
+        # CONTROLES PERSONALIZADOS (GRANDES Y CLAROS)
+        # ============================================================
+        st.markdown("### Controles de grabación")
+        
+        ctrl_cols = st.columns([2, 2, 1])
+        
         with ctrl_cols[0]:
-            if st.button("Pausar" if not st.session_state["paused"] else "Reanudar"):
-                st.session_state["paused"] = not st.session_state["paused"]
+            if st.session_state.get("paused", False):
+                if st.button("▶️ Reanudar grabación", type="primary", use_container_width=True):
+                    st.session_state["paused"] = False
+                    st.rerun()
+            else:
+                if st.button("⏸️ Pausar grabación", use_container_width=True):
+                    st.session_state["paused"] = True
+                    st.rerun()
+        
         with ctrl_cols[1]:
-            if st.button("Detener"):
+            if st.button("⏹️ Finalizar y guardar", type="secondary", use_container_width=True):
                 st.session_state["save_prompt"] = True
                 st.session_state["paused"] = True
+                st.rerun()
+        
+        with ctrl_cols[2]:
+            # Indicador de estado
+            if st.session_state.get("paused", False):
+                st.warning("⏸️ PAUSADO")
+            else:
+                st.success("🔴 GRABANDO")
+        
+        st.markdown("---")
 
         try:
             rtc_configuration = RTCConfiguration(
@@ -526,54 +582,88 @@ def app():
         gen_mp = st.session_state.get("generate_mediapipe", False)
         gen_leg = st.session_state.get("generate_legacy", True)
 
+        # ============================================================
+        # CONSTRAINTS DE VIDEO CON FPS LIMITADO (CRÍTICO PARA EVITAR ACELERACIÓN)
+        # ============================================================
+        media_stream_constraints = {
+            "video": {
+                "frameRate": {"ideal": TARGET_FPS, "max": TARGET_FPS}  # Limitar FPS de captura
+            },
+            "audio": False
+        }
+
+        # Estado inicial: siempre playing (auto-start)
         ctx = webrtc_streamer(
             key="recon-ia-webrtc",
             mode=WebRtcMode.SENDRECV,
             rtc_configuration=rtc_configuration,
-            media_stream_constraints={"video": True, "audio": False},
+            media_stream_constraints=media_stream_constraints,  # FPS limitado
             video_processor_factory=lambda: Processor(
                 pid, eid, nts, sr, gen_raw, gen_mp, gen_leg
             ),
             async_processing=True,
+            desired_playing_state=True,  # Auto-iniciar
         )
 
-        # Diálogo Guardar/Descartar
+        # ============================================================
+        # DIÁLOGO DE CONFIRMACIÓN (MEJORADO)
+        # ============================================================
         if st.session_state.get("save_prompt"):
-            st.warning("¿Desea guardar esta sesión?")
-            bcols = st.columns(3)
+            st.markdown("---")
+            st.markdown("### 💾 Finalizar sesión")
+            
+            # Información de la sesión
+            st.info(f"""
+            **Sesión actual:**
+            - Paciente: {st.session_state.get('selected_patient', 'N/A')}
+            - Ejercicio: {st.session_state.get('selected_exercise', 'N/A')}
+            - Versiones generadas: {', '.join(versions)}
+            """)
+            
+            st.warning("⚠️ ¿Desea guardar esta sesión?")
+            
+            bcols = st.columns([2, 2, 1])
+            
             with bcols[0]:
-                if st.button("Guardar sesión"):
-                    if ctx and ctx.video_processor:
-                        sid, paths = ctx.video_processor.close_and_save()
-                        ctx.video_processor.release_models()
-                        try:
-                            ctx.stop()
-                        except Exception:
-                            pass
-                        if sid:
-                            st.success(f"✅ Sesión guardada (ID {sid})")
-                            raw_path, mp_path, leg_path = paths
-                            if raw_path: st.info(f"📹 RAW: {os.path.basename(raw_path)}")
-                            if mp_path: st.info(f"⚪ MediaPipe: {os.path.basename(mp_path)}")
-                            if leg_path: st.info(f"⚕️ Clínico: {os.path.basename(leg_path)}")
-                    _reset_record_ui_state()
-                    st.rerun()
+                if st.button("✅ Guardar sesión", type="primary", use_container_width=True):
+                    with st.spinner("Guardando sesión..."):
+                        if ctx and ctx.video_processor:
+                            sid, paths = ctx.video_processor.close_and_save()
+                            ctx.video_processor.release_models()
+                            try:
+                                ctx.stop()
+                            except Exception:
+                                pass
+                            if sid:
+                                st.success(f"✅ Sesión guardada correctamente (ID {sid})")
+                                raw_path, mp_path, leg_path = paths
+                                if raw_path: 
+                                    st.caption(f"📹 RAW: {os.path.basename(raw_path)}")
+                                if mp_path: 
+                                    st.caption(f"⚪ MediaPipe: {os.path.basename(mp_path)}")
+                                if leg_path: 
+                                    st.caption(f"⚕️ Clínico: {os.path.basename(leg_path)}")
+                                time.sleep(1.5)  # Dar tiempo para leer el mensaje
+                        _reset_record_ui_state()
+                        st.rerun()
 
             with bcols[1]:
-                if st.button("Descartar sesión"):
-                    if ctx and ctx.video_processor:
-                        sid, paths = ctx.video_processor.close_and_discard()
-                        ctx.video_processor.release_models()
-                        try:
-                            ctx.stop()
-                        except Exception:
-                            pass
-                    st.info("Sesión descartada.")
+                if st.button("🗑️ Descartar sesión", use_container_width=True):
+                    with st.spinner("Descartando sesión..."):
+                        if ctx and ctx.video_processor:
+                            sid, paths = ctx.video_processor.close_and_discard()
+                            ctx.video_processor.release_models()
+                            try:
+                                ctx.stop()
+                            except Exception:
+                                pass
+                        st.info("Sesión descartada correctamente")
+                        time.sleep(1)
                     _reset_record_ui_state()
                     st.rerun()
 
             with bcols[2]:
-                if st.button("Cancelar"):
+                if st.button("↩️ Volver", use_container_width=True):
                     st.session_state["save_prompt"] = False
                     st.session_state["paused"] = False
                     st.rerun()
@@ -615,6 +705,10 @@ def app():
                 gen_mp = st.session_state.get("generate_mediapipe", False)
                 gen_leg = st.session_state.get("generate_legacy", True)
 
+                # Usar FPS original del video subido
+                original_fps = cap.fps
+                st.info(f"📊 Video original: {original_fps:.1f} fps")
+
                 sess = SessionManager(
                     output_dir="data/exports",
                     base_name="analisis_video",
@@ -626,7 +720,7 @@ def app():
                     generate_mediapipe=gen_mp,
                     generate_legacy=gen_leg,
                 )
-                sid = sess.start_session(cap.width, cap.height, cap.fps)
+                sid = sess.start_session(cap.width, cap.height, original_fps)  # FPS original
 
                 detector = PoseDetector()
                 total_frames = int(cap.cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 1

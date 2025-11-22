@@ -10,14 +10,33 @@ def app():
     st.title("🏋️ Gestión de Ejercicios")
     st.write("Cree, edite o elimine ejercicios utilizados en las sesiones de análisis.")
 
-    # ------------------------------------------------------------
-    # FORMULARIO: NUEVO EJERCICIO
-    # ------------------------------------------------------------
-    with st.form("add_exercise_form"):
+    # ============================================================
+    # INICIALIZAR CONTADOR DE FORMULARIO (para forzar limpieza)
+    # ============================================================
+    if "exercise_form_counter" not in st.session_state:
+        st.session_state.exercise_form_counter = 0
+
+    # ============================================================
+    # FORMULARIO: NUEVO EJERCICIO (CON LIMPIEZA AUTOMÁTICA)
+    # ============================================================
+    with st.form("add_exercise_form", clear_on_submit=True):
         st.subheader("➕ Añadir nuevo ejercicio")
-        name = st.text_input("Nombre del ejercicio")
-        description = st.text_area("Descripción o notas")
-        submitted = st.form_submit_button("Guardar ejercicio")
+        
+        # Keys únicos que cambian al guardar (fuerza reset de valores)
+        form_key = st.session_state.exercise_form_counter
+        
+        name = st.text_input(
+            "Nombre del ejercicio",
+            key=f"exercise_name_{form_key}",
+            placeholder="Ej: Sentadillas, Flexiones, Extensión de rodilla..."
+        )
+        description = st.text_area(
+            "Descripción o notas",
+            key=f"exercise_desc_{form_key}",
+            placeholder="Descripción del ejercicio, objetivos, consideraciones..."
+        )
+        
+        submitted = st.form_submit_button("Guardar ejercicio", type="primary")
 
         if submitted:
             if not name.strip():
@@ -26,15 +45,23 @@ def app():
                 try:
                     crud.create_exercise(name.strip(), description.strip() or None)
                     st.success(f"✅ Ejercicio '{name.strip()}' registrado correctamente.")
+                    
+                    # CRÍTICO: Incrementar contador para limpiar formulario
+                    st.session_state.exercise_form_counter += 1
+                    
+                    # Pequeña pausa para mostrar el mensaje de éxito
+                    import time
+                    time.sleep(0.5)
+                    
                     st.rerun()
                 except Exception as e:
                     st.error(f"❌ Error al registrar el ejercicio: {e}")
 
     st.divider()
 
-    # ------------------------------------------------------------
+    # ============================================================
     # LISTADO + FILTRO
-    # ------------------------------------------------------------
+    # ============================================================
     st.subheader("📋 Ejercicios registrados")
 
     try:
@@ -78,16 +105,18 @@ def app():
         cols = st.columns([3, 6, 1, 1])
         cols[0].write(exercise_name or "—")
         cols[1].write(exercise_desc or "—")
-        edit_btn = cols[2].button("✏️", key=f"edit_{exercise_id}")
-        del_btn = cols[3].button("🗑️", key=f"delete_{exercise_id}")
+        edit_btn = cols[2].button("✏️", key=f"edit_{exercise_id}", help="Editar ejercicio")
+        del_btn = cols[3].button("🗑️", key=f"delete_{exercise_id}", help="Eliminar ejercicio")
 
-        # ---------- INICIO DE EDICIÓN ----------
+        # ============================================================
+        # INICIO DE EDICIÓN
+        # ============================================================
         if edit_btn:
             st.session_state["editing_exercise_id"] = exercise_id
 
         if st.session_state.get("editing_exercise_id") == exercise_id:
             with st.form(f"edit_form_{exercise_id}", clear_on_submit=False):
-                st.subheader(f"Editar ejercicio ID {exercise_id}")
+                st.subheader(f"✏️ Editar ejercicio ID {exercise_id}")
 
                 new_name = st.text_input(
                     "Nombre del ejercicio",
@@ -101,8 +130,8 @@ def app():
                 )
 
                 c_upd, c_cancel = st.columns(2)
-                update = c_upd.form_submit_button("Actualizar")
-                cancel = c_cancel.form_submit_button("Cancelar")
+                update = c_upd.form_submit_button("✅ Actualizar", type="primary")
+                cancel = c_cancel.form_submit_button("❌ Cancelar")
 
                 if update:
                     if not new_name.strip():
@@ -113,7 +142,7 @@ def app():
                             if updated:
                                 st.success(f"✅ Ejercicio '{new_name.strip()}' actualizado correctamente.")
                             else:
-                                st.info("No se detectaron cambios.")
+                                st.info("ℹ️ No se detectaron cambios.")
                             st.session_state.pop("editing_exercise_id", None)
                             st.rerun()
                         except Exception as e:
@@ -124,15 +153,18 @@ def app():
                     st.info("❎ Edición cancelada.")
                     st.rerun()
 
-        # ---------- ELIMINACIÓN (confirmación) ----------
+        # ============================================================
+        # ELIMINACIÓN (confirmación)
+        # ============================================================
         if del_btn:
             st.session_state["delete_candidate"] = exercise_id
 
         if st.session_state.get("delete_candidate") == exercise_id:
             st.warning(f"⚠️ ¿Seguro que desea eliminar el ejercicio '{exercise_name}' y sus sesiones asociadas?")
+            
             c1, c2 = st.columns(2)
-            confirm = c1.button("Confirmar eliminación", key=f"confirm_delete_{exercise_id}")
-            cancel = c2.button("Cancelar", key=f"cancel_delete_{exercise_id}")
+            confirm = c1.button("✅ Confirmar eliminación", key=f"confirm_delete_{exercise_id}", type="primary")
+            cancel = c2.button("❌ Cancelar", key=f"cancel_delete_{exercise_id}")
 
             if confirm:
                 try:
@@ -140,7 +172,7 @@ def app():
                     if deleted:
                         st.success(f"🗑️ Ejercicio '{exercise_name}' eliminado correctamente.")
                     else:
-                        st.warning("No se encontró el registro a eliminar.")
+                        st.warning("⚠️ No se encontró el registro a eliminar.")
                     st.session_state.pop("delete_candidate", None)
                     st.rerun()
                 except Exception as e:
@@ -149,4 +181,4 @@ def app():
             elif cancel:
                 st.session_state.pop("delete_candidate", None)
                 st.info("❎ Eliminación cancelada.")
-                st.rerun() 
+                st.rerun()
