@@ -3,6 +3,7 @@ import os
 import tempfile
 import datetime
 import cv2
+import numpy as np
 import streamlit as st
 
 # Core
@@ -24,6 +25,29 @@ try:
     import av
 except Exception:
     _WEBRTC_OK = False
+
+
+# -----------------------------
+# UTILIDADES DE DIBUJO
+# -----------------------------
+def _draw_sequence_text(image_bgr, sequence: int) -> None:
+    """
+    Dibuja el contador de secuencia en la esquina superior izquierda (estilo Phiteca).
+    
+    Args:
+        image_bgr: Frame BGR donde dibujar
+        sequence: Número de secuencia actual
+    """
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 1
+    thickness = 1
+    
+    # Rectángulo blanco de fondo (15, 5) a (250, 40)
+    cv2.rectangle(image_bgr, (15, 5), (250, 40), (250, 250, 250), -1)
+    
+    # Texto en azul: "Secuencia: X"
+    text = f'Secuencia: {sequence}'
+    cv2.putText(image_bgr, text, (20, 30), font, font_scale, (255, 0, 0), thickness, cv2.LINE_AA)
 
 
 # -----------------------------
@@ -179,7 +203,8 @@ def _extract_joint_data(lm, w, h):
 # ============================================================
 class Processor(VideoProcessorBase):
     """
-    Procesador de vídeo para streamlit-webrtc con soporte para 3 versiones de salida.
+    Procesador de vídeo para streamlit-webrtc con soporte para 3 versiones de salida
+    y contador de secuencia visible.
     """
     
     def __init__(self, patient_id, exercise_id, notes, sampling_rate=0.0,
@@ -223,49 +248,70 @@ class Processor(VideoProcessorBase):
         # Sesión al primer frame
         self._ensure_session(w, h, fps_hint=30)
 
+        # Obtener número de secuencia ANTES de escribir
+        sequence_num = self.session_mgr.get_sequence_counter()
+
         # ============================================================
         # GENERACIÓN DE LAS 3 VERSIONES DE FRAME
         # ============================================================
         
-        # 1. Frame RAW (sin procesar) - copia del original
-        frame_raw = img_bgr.copy() if self.generate_raw else None
+        # 1. Frame RAW (sin procesar) - copia del original CON secuencia
+        frame_raw = None
+        if self.generate_raw:
+            frame_raw = img_bgr.copy()
+            _draw_sequence_text(frame_raw, sequence_num)
         
         # 2. Procesamiento de pose
         image_bgr, results = self.detector.process_frame(img_bgr)
         landmarks_found = bool(results and results.pose_landmarks)
 
-        # 3. Frame MEDIAPIPE (overlay completo de MediaPipe)
+        # ============================================================
+        # 3. Frame MEDIAPIPE (⚪ FONDO BLANCO + esqueleto) CON secuencia
+        # ============================================================
         frame_mediapipe = None
-        if self.generate_mediapipe and landmarks_found:
-            frame_mediapipe = image_bgr.copy()
-            frame_mediapipe = self.detector.draw_mediapipe_full_overlay(frame_mediapipe, results)
-        
-        # 4. Frame LEGACY (overlay clínico personalizado)
-        frame_legacy = None
-        if self.generate_legacy and landmarks_found:
-            lm = self.detector.extract_landmarks(results)
-            joint_data, angles = _extract_joint_data(lm, w, h)
-            
-            if joint_data:
-                frame_legacy = image_bgr.copy()
-                frame_legacy = draw_legacy_overlay(
-                    frame_legacy, lm, w, h,
-                    angles=angles,
-                    a_max=60.0,
-                    frame_idx=self.frame_idx,
-                    fps=30
+        if self.generate_mediapipe:
+            if landmarks_found:
+                # NUEVO: Dibujar sobre fondo blanco en lugar del video original
+                frame_mediapipe = self.detector.draw_mediapipe_on_white_background(
+                    w, h, results, sequence=sequence_num
                 )
+            else:
+                # Si no hay landmarks, frame blanco con contador
+                frame_mediapipe = np.ones((h, w, 3), dtype=np.uint8) * 255
+                _draw_sequence_text(frame_mediapipe, sequence_num)
+        
+        # 4. Frame LEGACY (overlay clínico personalizado) CON secuencia
+        frame_legacy = None
+        if self.generate_legacy:
+            frame_legacy = image_bgr.copy()
+            if landmarks_found:
+                lm = self.detector.extract_landmarks(results)
+                joint_data, angles = _extract_joint_data(lm, w, h)
+                
+                if joint_data:
+                    frame_legacy = draw_legacy_overlay(
+                        frame_legacy, lm, w, h,
+                        angles=angles,
+                        a_max=60.0,
+                        sequence=sequence_num  # NUEVO: Pasar contador
+                    )
 
-                # Registro en BD (solo si no está en pausa)
-                if self.session_mgr and not st.session_state.get("paused", False):
-                    try:
-                        self.session_mgr.record_frame_data(
-                            frame_index=self.frame_idx,
-                            elapsed_time=self.session_mgr.elapsed_time(),
-                            joints=joint_data
-                        )
-                    except Exception as e:
-                        print(f"❌ Error al registrar frame {self.frame_idx}: {e}")
+                    # Registro en BD (solo si no está en pausa)
+                    if self.session_mgr and not st.session_state.get("paused", False):
+                        try:
+                            self.session_mgr.record_frame_data(
+                                frame_index=self.frame_idx,
+                                elapsed_time=self.session_mgr.elapsed_time(),
+                                joints=joint_data
+                            )
+                        except Exception as e:
+                            print(f"❌ Error al registrar frame {self.frame_idx}: {e}")
+                else:
+                    # Si no hay landmarks, al menos dibujar la secuencia
+                    _draw_sequence_text(frame_legacy, sequence_num)
+            else:
+                # Si no hay landmarks, al menos dibujar la secuencia
+                _draw_sequence_text(frame_legacy, sequence_num)
 
         # ============================================================
         # ESCRITURA DE VÍDEOS (solo si no está en pausa)
@@ -394,7 +440,7 @@ def app():
             generate_mediapipe = st.checkbox(
                 "🤖 MediaPipe completo", 
                 value=False,
-                help="Overlay estándar de MediaPipe con 33 puntos"
+                help="⚪ Fondo blanco + esqueleto de pose (33 puntos)"
             )
         with col_vid[2]:
             generate_legacy = st.checkbox(
@@ -452,7 +498,7 @@ def app():
         # Mostrar versiones activas
         versions = []
         if st.session_state.get("generate_raw"): versions.append("RAW")
-        if st.session_state.get("generate_mediapipe"): versions.append("MediaPipe")
+        if st.session_state.get("generate_mediapipe"): versions.append("⚪ MediaPipe (fondo blanco)")
         if st.session_state.get("generate_legacy"): versions.append("Clínico")
         st.info(f"📹 Generando versiones: {', '.join(versions)}")
         
@@ -508,7 +554,7 @@ def app():
                             st.success(f"✅ Sesión guardada (ID {sid})")
                             raw_path, mp_path, leg_path = paths
                             if raw_path: st.info(f"📹 RAW: {os.path.basename(raw_path)}")
-                            if mp_path: st.info(f"🤖 MediaPipe: {os.path.basename(mp_path)}")
+                            if mp_path: st.info(f"⚪ MediaPipe: {os.path.basename(mp_path)}")
                             if leg_path: st.info(f"⚕️ Clínico: {os.path.basename(leg_path)}")
                     _reset_record_ui_state()
                     st.rerun()
@@ -545,7 +591,7 @@ def app():
             # Mostrar versiones activas
             versions = []
             if st.session_state.get("generate_raw"): versions.append("RAW")
-            if st.session_state.get("generate_mediapipe"): versions.append("MediaPipe")
+            if st.session_state.get("generate_mediapipe"): versions.append("⚪ MediaPipe (fondo blanco)")
             if st.session_state.get("generate_legacy"): versions.append("Clínico")
             st.info(f"📹 Generando versiones: {', '.join(versions)}")
             
@@ -594,42 +640,63 @@ def app():
 
                     h, w = frame.shape[:2]
                     
-                    # Frame RAW
-                    frame_raw = frame.copy() if gen_raw else None
+                    # Obtener número de secuencia ANTES de escribir
+                    sequence_num = sess.get_sequence_counter()
+                    
+                    # Frame RAW CON secuencia
+                    frame_raw = None
+                    if gen_raw:
+                        frame_raw = frame.copy()
+                        _draw_sequence_text(frame_raw, sequence_num)
                     
                     # Procesamiento
                     image_bgr, results = detector.process_frame(frame)
                     
-                    # Frame MediaPipe
+                    # ============================================================
+                    # Frame MediaPipe (⚪ FONDO BLANCO + esqueleto) CON secuencia
+                    # ============================================================
                     frame_mediapipe = None
-                    if gen_mp and results and results.pose_landmarks:
-                        frame_mediapipe = image_bgr.copy()
-                        frame_mediapipe = detector.draw_mediapipe_full_overlay(frame_mediapipe, results)
-                    
-                    # Frame Legacy
-                    frame_legacy = None
-                    if gen_leg and results and results.pose_landmarks:
-                        lm = detector.extract_landmarks(results)
-                        joint_data, angles = _extract_joint_data(lm, w, h)
-                        
-                        if joint_data:
-                            frame_legacy = image_bgr.copy()
-                            frame_legacy = draw_legacy_overlay(
-                                frame_legacy, lm, w, h,
-                                angles=angles,
-                                a_max=60.0,
-                                frame_idx=idx,
-                                fps=cap.fps
+                    if gen_mp:
+                        if results and results.pose_landmarks:
+                            # NUEVO: Dibujar sobre fondo blanco en lugar del video original
+                            frame_mediapipe = detector.draw_mediapipe_on_white_background(
+                                w, h, results, sequence=sequence_num
                             )
+                        else:
+                            # Si no hay landmarks, frame blanco con contador
+                            frame_mediapipe = np.ones((h, w, 3), dtype=np.uint8) * 255
+                            _draw_sequence_text(frame_mediapipe, sequence_num)
+                    
+                    # Frame Legacy CON secuencia
+                    frame_legacy = None
+                    if gen_leg:
+                        frame_legacy = image_bgr.copy()
+                        if results and results.pose_landmarks:
+                            lm = detector.extract_landmarks(results)
+                            joint_data, angles = _extract_joint_data(lm, w, h)
                             
-                            try:
-                                sess.record_frame_data(
-                                    frame_index=idx,
-                                    elapsed_time=sess.elapsed_time(),
-                                    joints=joint_data
+                            if joint_data:
+                                frame_legacy = draw_legacy_overlay(
+                                    frame_legacy, lm, w, h,
+                                    angles=angles,
+                                    a_max=60.0,
+                                    sequence=sequence_num  # NUEVO: Pasar contador
                                 )
-                            except Exception as e:
-                                print(f"❌ Error al registrar frame {idx}: {e}")
+                                
+                                try:
+                                    sess.record_frame_data(
+                                        frame_index=idx,
+                                        elapsed_time=sess.elapsed_time(),
+                                        joints=joint_data
+                                    )
+                                except Exception as e:
+                                    print(f"❌ Error al registrar frame {idx}: {e}")
+                            else:
+                                # Si no hay landmarks, al menos dibujar la secuencia
+                                _draw_sequence_text(frame_legacy, sequence_num)
+                        else:
+                            # Si no hay landmarks, al menos dibujar la secuencia
+                            _draw_sequence_text(frame_legacy, sequence_num)
 
                     # Escribir frames
                     sess.write_video_frames(
@@ -648,7 +715,7 @@ def app():
                 raw_path, mp_path, leg_path = sess.get_video_paths()
                 st.success(f"✅ Sesión guardada (ID {sid})")
                 if raw_path: st.info(f"📹 RAW: {os.path.basename(raw_path)}")
-                if mp_path: st.info(f"🤖 MediaPipe: {os.path.basename(mp_path)}")
+                if mp_path: st.info(f"⚪ MediaPipe: {os.path.basename(mp_path)}")
                 if leg_path: st.info(f"⚕️ Clínico: {os.path.basename(leg_path)}")
                 
                 _reset_record_ui_state()
@@ -693,7 +760,7 @@ def app():
             if video_path_raw and os.path.exists(video_path_raw):
                 available_versions.append("RAW")
             if video_path_mediapipe and os.path.exists(video_path_mediapipe):
-                available_versions.append("MediaPipe")
+                available_versions.append("⚪ MediaPipe")
             if video_path_legacy and os.path.exists(video_path_legacy):
                 available_versions.append("Clínico")
             

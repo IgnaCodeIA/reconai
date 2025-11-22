@@ -16,12 +16,14 @@ def _p(lm, name, w, h):
     return int(x * w), int(y * h)
 
 def draw_legacy_overlay(image_bgr, lm: dict, w: int, h: int, angles: dict,
-                        a_max: float = 60.0, frame_idx: int = None, fps: int = None):
+                        a_max: float = 60.0, sequence: int = None, 
+                        frame_idx: int = None, fps: int = None):
     """
     Dibuja el estilo 'legacy' del cliente sobre image_bgr.
 
     lm: dict de landmarks normalizados (PoseDetector.extract_landmarks)
     angles: {'angle_arm_r': float, 'angle_arm_l': float, 'angle_leg_r': float, 'angle_leg_l': float}
+    sequence: número de secuencia actual (NUEVO - estilo Phiteca)
     frame_idx: número de frame actual (opcional, para mostrar en overlay)
     fps: frames por segundo (opcional, para mostrar en overlay)
     """
@@ -33,7 +35,12 @@ def draw_legacy_overlay(image_bgr, lm: dict, w: int, h: int, angles: dict,
         "RIGHT_HEEL", "RIGHT_FOOT_INDEX", "LEFT_HEEL", "LEFT_FOOT_INDEX",
     ]
     if any(k not in lm for k in need):
-        return image_bgr  # sin todos los puntos, no dibujamos legacy
+        # Si no hay landmarks completos, al menos dibujar secuencia si existe
+        if sequence is not None:
+            cv2.rectangle(image_bgr, (15, 5), (250, 40), (250, 250, 250), -1)
+            cv2.putText(image_bgr, f'Secuencia: {sequence}', (20, 30), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 1, C_INFO, 1, cv2.LINE_AA)
+        return image_bgr
 
     # Píxeles - Brazos
     SH_R = _p(lm, "RIGHT_SHOULDER", w, h)
@@ -137,18 +144,30 @@ def draw_legacy_overlay(image_bgr, lm: dict, w: int, h: int, angles: dict,
     if a_leg_l is not None:
         _put(str(int(round(a_leg_l))), (KN_L[0], KN_L[1]), ok=False)
 
-    # --- Información de sesión (NUEVO - como en script original)
-    # Fondo blanco para texto
-    cv2.rectangle(image_bgr, (15, 5), (280, 65), (250, 250, 250), -1)
+    # ============================================================
+    # NUEVO: CONTADOR DE SECUENCIA (estilo Phiteca original)
+    # ============================================================
+    # Rectángulo blanco de fondo (estilo original: posición (15, 5) a (250, 40))
+    cv2.rectangle(image_bgr, (15, 5), (250, 40), (250, 250, 250), -1)
     
-    # Frame actual
-    if frame_idx is not None:
-        cv2.putText(image_bgr, f'Frame: {frame_idx}', (20, 30), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, C_INFO, 2, cv2.LINE_AA)
-    
-    # Dimensiones y FPS
-    if fps is not None:
-        cv2.putText(image_bgr, f'{w}x{h} @ {fps}fps', (20, 55), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, C_INFO, 1, cv2.LINE_AA)
+    # Texto "Secuencia: X" en azul (color original: (255, 0, 0) = azul en BGR)
+    if sequence is not None:
+        cv2.putText(image_bgr, f'Secuencia: {sequence}', (20, 30), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 1, C_INFO, 1, cv2.LINE_AA)
+
+    # --- Información adicional de sesión (opcional, en otra caja)
+    if frame_idx is not None or fps is not None:
+        # Segundo rectángulo para info adicional
+        cv2.rectangle(image_bgr, (15, 45), (280, 95), (250, 250, 250), -1)
+        
+        y_pos = 70
+        if frame_idx is not None:
+            cv2.putText(image_bgr, f'Frame: {frame_idx}', (20, y_pos), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, C_INFO, 1, cv2.LINE_AA)
+            y_pos += 20
+        
+        if fps is not None:
+            cv2.putText(image_bgr, f'{w}x{h} @ {fps}fps', (20, y_pos), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, C_INFO, 1, cv2.LINE_AA)
 
     return image_bgr

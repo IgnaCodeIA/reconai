@@ -23,6 +23,7 @@ class SessionManager:
     - Soporte para múltiples versiones de vídeo simultáneas
     - Sampling rate configurable para reducir volumen de datos
     - Métricas de simetría bilateral con unidades diferenciadas
+    - Contador de secuencia visible en los 3 tipos de vídeo
     """
 
     def __init__(
@@ -70,6 +71,9 @@ class SessionManager:
         self._frames_written = 0
         self._frames_recorded_to_db = 0
         
+        # NUEVO: Contador de secuencia (estilo Phiteca)
+        self.sequence_counter = 0
+        
         # NUEVO: Flags de configuración
         self.generate_raw = generate_raw
         self.generate_mediapipe = generate_mediapipe
@@ -96,6 +100,7 @@ class SessionManager:
         self.frame_size = (width, height)
         self.fps = int(round(fps)) if fps else 30
         self.start_time = time.time()
+        self.sequence_counter = 0  # Reset contador
 
         ts = timestamp()
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
@@ -241,6 +246,7 @@ class SessionManager:
     ) -> None:
         """
         Escribe frames a los vídeos de salida (según qué versiones estén activas).
+        Incrementa el contador de secuencia.
         
         Args:
             frame_raw: Frame sin procesar (original)
@@ -257,6 +263,16 @@ class SessionManager:
             self.video_writer_legacy.write(frame_legacy)
         
         self._frames_written += 1
+        self.sequence_counter += 1  # Incrementar contador de secuencia
+
+    def get_sequence_counter(self) -> int:
+        """
+        Retorna el número de secuencia actual (frames escritos).
+        
+        Returns:
+            Contador de secuencia (número del próximo frame a escribir)
+        """
+        return self.sequence_counter
 
     # ============================================================
     # CIERRE DE SESIÓN
@@ -271,8 +287,9 @@ class SessionManager:
         - "pixels" para simetrías posicionales
         """
         log.info(
-            "close_session ENTER sid=%s, frames_written=%s, frames_in_db=%s, sampling_rate=%s",
-            self.session_id, self._frames_written, self._frames_recorded_to_db, self.sampling_rate
+            "close_session ENTER sid=%s, frames_written=%s, frames_in_db=%s, sampling_rate=%s, sequence=%s",
+            self.session_id, self._frames_written, self._frames_recorded_to_db, 
+            self.sampling_rate, self.sequence_counter
         )
 
         # Cerrar los 3 writers
