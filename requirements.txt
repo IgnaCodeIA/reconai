@@ -6,3 +6,4 @@ pandas
 reportlab
 streamlit
 protobuf
+streamlit-webrtc

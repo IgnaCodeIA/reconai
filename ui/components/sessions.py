@@ -7,26 +7,30 @@ import cv2
 import numpy as np
 import streamlit as st
 
-# Core
-from core.pose_detection import PoseDetector
-from core.angle_calculator import calculate_angle
+from db import crud
 from core.session_manager import SessionManager
+from core.pose_detection import PoseDetector
 from core.video_capture import VideoCaptureManager
 from core.legacy_overlay import draw_legacy_overlay
+from core.utils import safe_round
 
-# CRUD
-from db import crud
-
+# ============================================================
+# IMPORTS DE WEBRTC (CRÍTICO)
+# ============================================================
+try:
+    from streamlit_webrtc import (
+        VideoProcessorBase,
+        webrtc_streamer,
+        WebRtcMode,
+        RTCConfiguration
+    )
+    _WEBRTC_OK = True
+except ImportError:
+    _WEBRTC_OK = False
+    print("⚠️ streamlit-webrtc no está instalado")
 # -------------------------------------------------------------
 # WebRTC opcional (webcam en navegador). Si no está, se desactiva.
 # -------------------------------------------------------------
-_WEBRTC_OK = True
-try:
-    from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, WebRtcMode, RTCConfiguration
-    import av
-except Exception:
-    _WEBRTC_OK = False
-
 
 # ============================================================
 # CONFIGURACIÓN DE FPS

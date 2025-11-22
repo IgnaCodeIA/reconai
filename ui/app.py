@@ -7,6 +7,12 @@ import streamlit as st
 # ============================================================
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+# ============================================================
+# Inicialización de la base de datos
+# ============================================================
+from db.init_db import ensure_database_exists
+ensure_database_exists()
+
 from ui.components import charts, patients, exercises, sessions, reports
 
 # ============================================================
@@ -48,7 +54,6 @@ def main():
     except Exception as e:
         st.error("❌ Ha ocurrido un error inesperado al cargar la sección.")
         st.exception(e)  # Muestra el traceback completo para depuración
-
 
 # ============================================================
 # Punto de entrada
