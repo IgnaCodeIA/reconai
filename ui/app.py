@@ -3,9 +3,18 @@ import os
 import streamlit as st
 
 # ============================================================
-# Ajuste de ruta para importar módulos locales
+# Ajuste de ruta para importar módulos locales (PyInstaller compatible)
 # ============================================================
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+if getattr(sys, 'frozen', False):
+    # Ejecutando como ejecutable empaquetado
+    application_path = sys._MEIPASS
+else:
+    # Ejecutando como script normal
+    application_path = os.path.dirname(os.path.abspath(__file__))
+    # Agregar directorio padre para imports relativos
+    parent_dir = os.path.abspath(os.path.join(application_path, ".."))
+    if parent_dir not in sys.path:
+        sys.path.insert(0, parent_dir)
 
 # ============================================================
 # Inicialización de la base de datos

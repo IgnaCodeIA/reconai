@@ -1,39 +1,76 @@
+"""
+Utilidades compartidas para Recon IA.
+Compatible con PyInstaller.
+"""
+
 import os
-import datetime
+import sys
+from datetime import datetime
 
 
-def ensure_dir(path):
+def get_base_directory():
     """
-    Crea el directorio si no existe.
+    Obtiene el directorio base de la aplicación.
+    
+    Returns:
+        str: Ruta al directorio base (donde está el .exe o el proyecto)
     """
-    if not os.path.exists(path):
-        os.makedirs(path)
-        print(f"[Utils] Directorio creado: {path}")
+    if getattr(sys, 'frozen', False):
+        # Ejecutable: directorio del .exe
+        return os.path.dirname(sys.executable)
+    else:
+        # Desarrollo: raíz del proyecto
+        return os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+
+def ensure_dir(path: str) -> str:
+    """
+    Asegura que un directorio exista, creándolo si es necesario.
+    
+    CRÍTICO: En ejecutable, crea carpetas relativas al .exe, NO en _MEIPASS.
+    
+    Args:
+        path: Ruta del directorio (relativa o absoluta)
+    
+    Returns:
+        str: Ruta absoluta del directorio creado
+    """
+    # Si es ruta relativa, hacerla relativa al directorio base
+    if not os.path.isabs(path):
+        base_dir = get_base_directory()
+        path = os.path.join(base_dir, path)
+    
+    os.makedirs(path, exist_ok=True)
     return path
 
 
-def timestamp():
+def timestamp() -> str:
     """
-    Devuelve un timestamp legible para logs o nombres de archivo.
-    Ejemplo: '2025-10-25_15-30-12'
+    Genera timestamp para nombres de archivo.
+    
+    Returns:
+        str: Timestamp en formato YYYYMMDD_HHMMSS
     """
-    return datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-
-def log_info(message):
-    print(f"[INFO] {message}")
-
-def log_warn(message):
-    print(f"[WARN] {message}")
-
-def log_error(message):
-    print(f"[ERROR] {message}")
+    return datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
 def safe_round(value, decimals=2):
     """
-    Redondea de forma segura, devolviendo 0.0 si no es numérico.
+    Redondea un valor de forma segura manejando None y NaN.
+    
+    Args:
+        value: Valor a redondear
+        decimals: Número de decimales
+    
+    Returns:
+        float o None
     """
+    if value is None:
+        return None
     try:
+        import math
+        if math.isnan(value) or math.isinf(value):
+            return None
         return round(float(value), decimals)
     except (TypeError, ValueError):
-        return 0.0
+        return None
