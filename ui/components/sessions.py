@@ -6,6 +6,7 @@ import time
 import cv2
 import numpy as np
 import streamlit as st
+from pathlib import Path
 
 from db import crud
 from core.session_manager import SessionManager
@@ -13,7 +14,7 @@ from core.pose_detection import PoseDetector
 from core.video_capture import VideoCaptureManager
 from core.legacy_overlay import draw_legacy_overlay
 from core.utils import safe_round
-
+from core.angle_calculator import calculate_angle
 # ============================================================
 # IMPORTS DE WEBRTC (CRÍTICO)
 # ============================================================
@@ -676,231 +677,259 @@ def app():
     # MODO 2: Subir vídeo (análisis batch)
     # ============================================================
     if st.session_state.get("record_mode") and st.session_state.get("source_mode") == "Subir vídeo":
+        from core.file_validator import FileValidator
+        from core.path_manager import get_temp_dir
+        import uuid
+        
         st.subheader("Análisis desde archivo de vídeo")
-        uploaded = st.file_uploader("Seleccione un archivo (MP4/MOV/AVI)", type=["mp4", "mov", "avi"])
+        
+        # Mostrar versiones activas
+        versions = []
+        if st.session_state.get("generate_raw"): versions.append("RAW")
+        if st.session_state.get("generate_mediapipe"): versions.append("MediaPipe (fondo blanco)")
+        if st.session_state.get("generate_legacy"): versions.append("Clínico")
+        st.info(f"Versiones a generar: {', '.join(versions)}")
+        
+        uploaded = st.file_uploader(
+            "Seleccione un archivo de video", 
+            type=["mp4", "mov", "avi", "mpeg", "mpg", "m4v", "mkv"],
+            help=f"Formatos soportados: MP4, MOV, AVI. Máximo {FileValidator.MAX_VIDEO_SIZE_MB}MB"
+        )
 
         if uploaded is None:
-            st.info("Suba un vídeo para analizar y guardar la sesión.")
+            st.info("Suba un video para analizar y guardar la sesión.")
         else:
-            # Mostrar versiones activas
-            versions = []
-            if st.session_state.get("generate_raw"): versions.append("RAW")
-            if st.session_state.get("generate_mediapipe"): versions.append("⚪ MediaPipe (fondo blanco)")
-            if st.session_state.get("generate_legacy"): versions.append("Clínico")
-            st.info(f"📹 Generando versiones: {', '.join(versions)}")
+            # Mostrar información del archivo subido
+            file_size_mb = uploaded.size / (1024 * 1024)
+            st.write(f"**Archivo:** {uploaded.name}")
+            st.write(f"**Tamaño:** {file_size_mb:.2f} MB")
             
-            if st.button("Analizar y guardar"):
-                os.makedirs("recordings", exist_ok=True)
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4", dir="recordings") as tmp:
-                    tmp.write(uploaded.getvalue())
-                    input_path = tmp.name
-
-                try:
-                    cap = VideoCaptureManager(input_path)
-                except Exception as e:
-                    st.error(f"No se pudo abrir el vídeo: {e}")
-                    return
-
-                pid = _safe_resolve_id(st.session_state["selected_patient"], patient_options)
-                eid = _safe_resolve_id(st.session_state["selected_exercise"], exercise_options)
-                nts = st.session_state["notes"]
-                sr = st.session_state.get("sampling_rate", 0.0)
-                gen_raw = st.session_state.get("generate_raw", False)
-                gen_mp = st.session_state.get("generate_mediapipe", False)
-                gen_leg = st.session_state.get("generate_legacy", True)
-
-                # Usar FPS original del video subido
-                original_fps = cap.fps
-                st.info(f"📊 Video original: {original_fps:.1f} fps")
-
-                sess = SessionManager(
-                    output_dir="data/exports",
-                    base_name="analisis_video",
-                    patient_id=pid,
-                    exercise_id=eid,
-                    notes=nts,
-                    sampling_rate=sr,
-                    generate_raw=gen_raw,
-                    generate_mediapipe=gen_mp,
-                    generate_legacy=gen_leg,
-                )
-                sid = sess.start_session(cap.width, cap.height, original_fps)  # FPS original
-
-                detector = PoseDetector()
-                total_frames = int(cap.cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 1
-                prog = st.progress(0)
-                idx = 0
-
-                while True:
-                    ret, frame = cap.read_frame()
-                    if not ret:
-                        break
-
-                    h, w = frame.shape[:2]
-                    
-                    # Obtener número de secuencia ANTES de escribir
-                    sequence_num = sess.get_sequence_counter()
-                    
-                    # Frame RAW CON secuencia
-                    frame_raw = None
-                    if gen_raw:
-                        frame_raw = frame.copy()
-                        _draw_sequence_text(frame_raw, sequence_num)
-                    
-                    # Procesamiento
-                    image_bgr, results = detector.process_frame(frame)
-                    
-                    # ============================================================
-                    # Frame MediaPipe (⚪ FONDO BLANCO + esqueleto) CON secuencia
-                    # ============================================================
-                    frame_mediapipe = None
-                    if gen_mp:
-                        if results and results.pose_landmarks:
-                            # NUEVO: Dibujar sobre fondo blanco en lugar del video original
-                            frame_mediapipe = detector.draw_mediapipe_on_white_background(
-                                w, h, results, sequence=sequence_num
-                            )
-                        else:
-                            # Si no hay landmarks, frame blanco con contador
-                            frame_mediapipe = np.ones((h, w, 3), dtype=np.uint8) * 255
-                            _draw_sequence_text(frame_mediapipe, sequence_num)
-                    
-                    # Frame Legacy CON secuencia
-                    frame_legacy = None
-                    if gen_leg:
-                        frame_legacy = image_bgr.copy()
-                        if results and results.pose_landmarks:
-                            lm = detector.extract_landmarks(results)
-                            joint_data, angles = _extract_joint_data(lm, w, h)
-                            
-                            if joint_data:
-                                frame_legacy = draw_legacy_overlay(
-                                    frame_legacy, lm, w, h,
-                                    angles=angles,
-                                    a_max=60.0,
-                                    sequence=sequence_num  # NUEVO: Pasar contador
-                                )
-                                
-                                try:
-                                    sess.record_frame_data(
-                                        frame_index=idx,
-                                        elapsed_time=sess.elapsed_time(),
-                                        joints=joint_data
-                                    )
-                                except Exception as e:
-                                    print(f"❌ Error al registrar frame {idx}: {e}")
-                            else:
-                                # Si no hay landmarks, al menos dibujar la secuencia
-                                _draw_sequence_text(frame_legacy, sequence_num)
-                        else:
-                            # Si no hay landmarks, al menos dibujar la secuencia
-                            _draw_sequence_text(frame_legacy, sequence_num)
-
-                    # Escribir frames
-                    sess.write_video_frames(
-                        frame_raw=frame_raw,
-                        frame_mediapipe=frame_mediapipe,
-                        frame_legacy=frame_legacy
-                    )
-                    
-                    idx += 1
-                    prog.progress(min(idx / total_frames, 1.0))
-
-                sess.close_session()
-                cap.release()
-                detector.release()
-                
-                raw_path, mp_path, leg_path = sess.get_video_paths()
-                st.success(f"✅ Sesión guardada (ID {sid})")
-                if raw_path: st.info(f"📹 RAW: {os.path.basename(raw_path)}")
-                if mp_path: st.info(f"⚪ MediaPipe: {os.path.basename(mp_path)}")
-                if leg_path: st.info(f"⚕️ Clínico: {os.path.basename(leg_path)}")
-                
-                _reset_record_ui_state()
-                st.rerun()
-
-    # ============================================================
-    # SECCIÓN 3: Listado de sesiones
-    # ============================================================
-    st.divider()
-    st.subheader("Sesiones registradas")
-
-    try:
-        sessions = crud.get_all_sessions()
-    except Exception as e:
-        st.error(f"Error al obtener sesiones: {e}")
-        return
-
-    if not sessions:
-        st.info("Aún no hay sesiones registradas.")
-        return
-
-    for s in sessions:
-        sid = s.get("id")
-        timestamp = s.get("datetime")
-        patient_name = s.get("patient_name")
-        exercise_name = s.get("exercise_name")
-        notes = s.get("notes")
-        
-        # Rutas de vídeo
-        video_path_raw = s.get("video_path_raw")
-        video_path_mediapipe = s.get("video_path_mediapipe")
-        video_path_legacy = s.get("video_path_legacy")
-
-        with st.expander(f"Sesión ID {sid} — {patient_name} / {exercise_name}"):
-            st.markdown(f"**Fecha:** {timestamp or datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-            st.markdown(f"**Paciente:** {patient_name}")
-            st.markdown(f"**Ejercicio:** {exercise_name}")
-            st.markdown(f"**Notas:** {notes or '—'}")
-            
-            # Mostrar versiones disponibles
-            available_versions = []
-            if video_path_raw and os.path.exists(video_path_raw):
-                available_versions.append("RAW")
-            if video_path_mediapipe and os.path.exists(video_path_mediapipe):
-                available_versions.append("⚪ MediaPipe")
-            if video_path_legacy and os.path.exists(video_path_legacy):
-                available_versions.append("Clínico")
-            
-            if available_versions:
-                st.info(f"📹 Versiones disponibles: {', '.join(available_versions)}")
+            # Verificar tamaño antes de procesar
+            if file_size_mb > FileValidator.MAX_VIDEO_SIZE_MB:
+                st.error(f"El archivo es demasiado grande ({file_size_mb:.1f}MB). Máximo permitido: {FileValidator.MAX_VIDEO_SIZE_MB}MB")
+                if st.button("Cancelar"):
+                    _reset_record_ui_state()
+                    st.rerun()
             else:
-                st.warning("⚠️ No hay vídeos disponibles")
-
-            c1, c2 = st.columns(2)
-            with c1:
-                if st.button("Ver métricas", key=f"metrics_{sid}"):
-                    metrics = crud.get_metrics_by_session(sid)
-                    if not metrics:
-                        st.info("No se encontraron métricas para esta sesión.")
-                    else:
-                        st.write("**Métricas registradas:**")
-                        for m in metrics:
-                            st.write(f"- {m[0]}: {m[1]} {m[2] or ''}")
-            
-            with c2:
-                if st.button("Eliminar sesión", key=f"delete_{sid}"):
-                    st.session_state["delete_candidate"] = sid
-
-                if st.session_state.get("delete_candidate") == sid:
-                    st.warning(f"¿Seguro que desea eliminar la sesión {sid}?")
-                    cc = st.columns(3)
-                    with cc[0]:
-                        if st.button("Confirmar", key=f"confirm_{sid}"):
-                            deleted = crud.delete_session(sid)
-                            if deleted:
-                                st.success(f"Sesión {sid} eliminada.")
-                            # Eliminar archivos de vídeo
-                            for path in [video_path_raw, video_path_mediapipe, video_path_legacy]:
-                                if path and os.path.exists(path):
-                                    try:
-                                        os.remove(path)
-                                    except Exception:
-                                        pass
-                            st.session_state.pop("delete_candidate", None)
+                # Estado para almacenar resultado de validación
+                if 'validation_result' not in st.session_state:
+                    st.session_state.validation_result = None
+                
+                # Botón de validación
+                if st.session_state.validation_result is None:
+                    if st.button("Validar archivo", type="primary"):
+                        with st.spinner("Validando archivo..."):
+                            # Guardar temporalmente para validar
+                            temp_dir = get_temp_dir()
+                            temp_filename = f"validate_{uuid.uuid4().hex[:8]}_{uploaded.name}"
+                            temp_path = temp_dir / temp_filename
+                            
+                            try:
+                                with open(temp_path, "wb") as f:
+                                    f.write(uploaded.getvalue())
+                                
+                                # Validar
+                                is_valid, message, metadata = FileValidator.validate_video(temp_path)
+                                
+                                st.session_state.validation_result = {
+                                    'valid': is_valid,
+                                    'message': message,
+                                    'metadata': metadata,
+                                    'temp_path': str(temp_path)
+                                }
+                                
+                            except Exception as e:
+                                st.session_state.validation_result = {
+                                    'valid': False,
+                                    'message': f"Error al validar: {str(e)}",
+                                    'metadata': {},
+                                    'temp_path': str(temp_path)
+                                }
+                            
                             st.rerun()
-                    with cc[1]:
-                        if st.button("Cancelar", key=f"cancel_{sid}"):
-                            st.session_state.pop("delete_candidate", None)
-                            st.info("Eliminación cancelada.")
+                
+                # Mostrar resultado de validación
+                if st.session_state.validation_result is not None:
+                    result = st.session_state.validation_result
+                    
+                    if result['valid']:
+                        st.success(f"Video válido: {result['message']}")
+                        
+                        # Mostrar metadata
+                        meta = result['metadata']
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Resolución", f"{meta.get('width', 0)}x{meta.get('height', 0)}")
+                        with col2:
+                            st.metric("FPS", f"{meta.get('fps', 0):.1f}")
+                        with col3:
+                            st.metric("Duración", f"{meta.get('duration_sec', 0)}s")
+                        
+                        st.caption(f"Frames: {meta.get('frame_count', 0)} | Codec: {meta.get('codec', 'unknown')}")
+                        
+                        # Verificar espacio en disco
+                        from core.path_manager import check_disk_space
+                        estimated_size_mb = file_size_mb * 3  # Estimación: original + 3 versiones procesadas
+                        has_space, available_mb = check_disk_space(int(estimated_size_mb))
+                        
+                        if not has_space:
+                            st.error(f"Espacio insuficiente en disco. Necesario: ~{estimated_size_mb:.0f}MB, Disponible: {available_mb}MB")
+                        else:
+                            st.info(f"Espacio disponible: {available_mb}MB (necesario: ~{estimated_size_mb:.0f}MB)")
+                            
+                            # Botón para analizar
+                            col_analyze, col_cancel = st.columns(2)
+                            
+                            with col_analyze:
+                                if st.button("Analizar video", type="primary", use_container_width=True):
+                                    temp_path = result['temp_path']
+                                    
+                                    try:
+                                        cap = VideoCaptureManager(temp_path)
+                                    except Exception as e:
+                                        st.error(f"No se pudo abrir el video: {e}")
+                                        st.session_state.validation_result = None
+                                        st.stop()
+
+                                    pid = _safe_resolve_id(st.session_state["selected_patient"], patient_options)
+                                    eid = _safe_resolve_id(st.session_state["selected_exercise"], exercise_options)
+                                    nts = st.session_state["notes"]
+                                    sr = st.session_state.get("sampling_rate", 0.0)
+                                    gen_raw = st.session_state.get("generate_raw", False)
+                                    gen_mp = st.session_state.get("generate_mediapipe", False)
+                                    gen_leg = st.session_state.get("generate_legacy", True)
+
+                                    # Usar FPS original del video
+                                    original_fps = cap.fps
+                                    st.info(f"Procesando video: {original_fps:.1f} fps")
+
+                                    sess = SessionManager(
+                                        base_name="analisis_video",
+                                        patient_id=pid,
+                                        exercise_id=eid,
+                                        notes=nts,
+                                        sampling_rate=sr,
+                                        generate_raw=gen_raw,
+                                        generate_mediapipe=gen_mp,
+                                        generate_legacy=gen_leg,
+                                    )
+                                    sid = sess.start_session(cap.width, cap.height, original_fps)
+
+                                    detector = PoseDetector()
+                                    total_frames = int(cap.cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 1
+                                    prog = st.progress(0)
+                                    idx = 0
+
+                                    while True:
+                                        ret, frame = cap.read_frame()
+                                        if not ret:
+                                            break
+
+                                        h, w = frame.shape[:2]
+                                        
+                                        sequence_num = sess.get_sequence_counter()
+                                        
+                                        # Frame RAW
+                                        frame_raw = None
+                                        if gen_raw:
+                                            frame_raw = frame.copy()
+                                            _draw_sequence_text(frame_raw, sequence_num)
+                                        
+                                        # Procesamiento
+                                        image_bgr, results = detector.process_frame(frame)
+                                        
+                                        # Frame MediaPipe
+                                        frame_mediapipe = None
+                                        if gen_mp:
+                                            if results and results.pose_landmarks:
+                                                frame_mediapipe = detector.draw_mediapipe_on_white_background(
+                                                    w, h, results, sequence=sequence_num
+                                                )
+                                            else:
+                                                frame_mediapipe = np.ones((h, w, 3), dtype=np.uint8) * 255
+                                                _draw_sequence_text(frame_mediapipe, sequence_num)
+                                        
+                                        # Frame Legacy
+                                        frame_legacy = None
+                                        if gen_leg:
+                                            frame_legacy = image_bgr.copy()
+                                            if results and results.pose_landmarks:
+                                                lm = detector.extract_landmarks(results)
+                                                joint_data, angles = _extract_joint_data(lm, w, h)
+                                                
+                                                if joint_data:
+                                                    frame_legacy = draw_legacy_overlay(
+                                                        frame_legacy, lm, w, h,
+                                                        angles=angles,
+                                                        a_max=60.0,
+                                                        sequence=sequence_num
+                                                    )
+                                                    
+                                                    try:
+                                                        sess.record_frame_data(
+                                                            frame_index=idx,
+                                                            elapsed_time=sess.elapsed_time(),
+                                                            joints=joint_data
+                                                        )
+                                                    except Exception as e:
+                                                        print(f"Error al registrar frame {idx}: {e}")
+                                                else:
+                                                    _draw_sequence_text(frame_legacy, sequence_num)
+                                            else:
+                                                _draw_sequence_text(frame_legacy, sequence_num)
+
+                                        sess.write_video_frames(
+                                            frame_raw=frame_raw,
+                                            frame_mediapipe=frame_mediapipe,
+                                            frame_legacy=frame_legacy
+                                        )
+                                        
+                                        idx += 1
+                                        prog.progress(min(idx / total_frames, 1.0))
+
+                                    sess.close_session()
+                                    cap.release()
+                                    detector.release()
+                                    
+                                    # Limpiar archivo temporal
+                                    try:
+                                        Path(temp_path).unlink()
+                                    except:
+                                        pass
+                                    
+                                    raw_path, mp_path, leg_path = sess.get_video_paths()
+                                    st.success(f"Sesión guardada (ID {sid})")
+                                    if raw_path: st.info(f"RAW: {os.path.basename(raw_path)}")
+                                    if mp_path: st.info(f"MediaPipe: {os.path.basename(mp_path)}")
+                                    if leg_path: st.info(f"Clínico: {os.path.basename(leg_path)}")
+                                    
+                                    st.session_state.validation_result = None
+                                    _reset_record_ui_state()
+                                    st.rerun()
+                            
+                            with col_cancel:
+                                if st.button("Cancelar", use_container_width=True):
+                                    # Limpiar temporal
+                                    try:
+                                        Path(result['temp_path']).unlink()
+                                    except:
+                                        pass
+                                    st.session_state.validation_result = None
+                                    _reset_record_ui_state()
+                                    st.rerun()
+                    else:
+                        st.error(f"Video inválido: {result['message']}")
+                        
+                        # Mostrar metadata si está disponible
+                        if result['metadata']:
+                            with st.expander("Detalles técnicos"):
+                                st.json(result['metadata'])
+                        
+                        if st.button("Intentar con otro archivo"):
+                            # Limpiar temporal
+                            try:
+                                Path(result['temp_path']).unlink()
+                            except:
+                                pass
+                            st.session_state.validation_result = None
                             st.rerun()
