@@ -7,7 +7,8 @@ import subprocess
 import numpy as np
 from typing import Dict, List, Tuple
 
-from core.utils import ensure_dir, timestamp
+from core.utils import timestamp
+from core.path_manager import get_exports_dir, check_disk_space
 from db import crud
 from core.logger import get_logger
 
@@ -32,7 +33,7 @@ class SessionManager:
 
     def __init__(
         self,
-        output_dir: str = "data/exports",
+        output_dir: str | None = None,
         base_name: str = "session",
         patient_id: int | None = None,
         exercise_id: int | None = None,
@@ -46,7 +47,9 @@ class SessionManager:
         use_ffmpeg: bool = True,  # Usar FFmpeg para máxima calidad
         video_bitrate: str = "8000k",  # Bitrate muy alto para calidad profesional
     ):
-        self.output_dir = ensure_dir(output_dir)
+        if output_dir is None:
+            output_dir = str(get_exports_dir() / "videos")
+        self.output_dir = output_dir
         
         # NUEVO: 3 VideoWriters (uno por cada versión) O FFmpeg pipes
         self.video_writer_raw: cv2.VideoWriter | None = None
@@ -172,6 +175,11 @@ class SessionManager:
         self.start_time = time.time()
         self.sequence_counter = 0  # Reset contador
 
+        has_space, available_mb = check_disk_space(100)
+        if not has_space:
+            raise RuntimeError(f"Espacio insuficiente en disco. Disponible: {available_mb}MB")
+        log.info(f"Espacio disponible en disco: {available_mb}MB")
+        
         ts = timestamp()
         
         log.info(f"Iniciando sesión con resolución {width}x{height} @ {self.fps}fps")

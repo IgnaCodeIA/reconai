@@ -7,11 +7,24 @@ NUEVO: Soporte para overlay MediaPipe completo (33 landmarks + conexiones están
 NUEVO: Contador de secuencia visible en overlays (estilo Phiteca)
 NUEVO: Overlay MediaPipe sobre fondo blanco puro (sin video original)
 """
-
 import cv2
-import mediapipe as mp
 import numpy as np
 from typing import Dict, Tuple, Any
+
+
+# Import robusto de MediaPipe
+try:
+    import mediapipe as mp
+    # Verificar que tiene la estructura esperada
+    if not hasattr(mp, 'solutions'):
+        raise ImportError("MediaPipe no tiene módulo 'solutions'")
+except (ImportError, AttributeError) as e:
+    print(f"Error importando MediaPipe: {e}")
+    print("Intentando reinstalar MediaPipe...")
+    import subprocess
+    import sys
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "mediapipe"])
+    import mediapipe as mp
 
 
 class PoseDetector:

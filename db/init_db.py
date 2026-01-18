@@ -2,41 +2,23 @@
 Initialize the local SQLite database for Recon IA.
 Ensures the database file and all required tables exist.
 
-CRÍTICO: En ejecutable, la BD debe estar fuera de _MEIPASS para persistir.
+CRÍTICO: Usa path_manager para ubicar la BD en AppData (persiste entre actualizaciones).
 """
 
-import os
-import sys
 import sqlite3
+from pathlib import Path
+
+# Importar el gestor de rutas
+from core.path_manager import get_db_path, get_database_dir
+
 from db import models
 
 # ============================================================
-# DATABASE PATHS (PyInstaller compatible)
+# DATABASE PATH (usando path_manager)
 # ============================================================
 
-def get_data_directory():
-    """
-    Obtiene el directorio de datos persistente.
-    
-    En ejecutable: usa directorio del .exe (no _MEIPASS)
-    En desarrollo: usa directorio del proyecto
-    """
-    if getattr(sys, 'frozen', False):
-        # Ejecutable: directorio donde está el .exe
-        # os.path.dirname(sys.executable) da la carpeta del .exe
-        exe_dir = os.path.dirname(sys.executable)
-        data_dir = os.path.join(exe_dir, "data")
-    else:
-        # Desarrollo: carpeta data/ en raíz del proyecto
-        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        data_dir = os.path.join(project_root, "data")
-    
-    return data_dir
-
-
-# Ruta de la base de datos (persistente)
-DATA_DIR = get_data_directory()
-DB_PATH = os.path.join(DATA_DIR, "sessions.db")
+# Ruta de la base de datos (persistente en AppData)
+DB_PATH = get_db_path()
 
 # Lista derivada automáticamente del módulo models
 REQUIRED_TABLE_NAMES = [
@@ -53,10 +35,16 @@ def get_connection():
     """
     Return a SQLite3 connection to the local database.
     Ensures that the database directory exists and foreign key constraints are enabled.
+    
+    IMPORTANTE: La BD se crea en AppData usando path_manager, no en el directorio
+    del ejecutable.
     """
-    os.makedirs(DATA_DIR, exist_ok=True)
+    # Asegurar que el directorio de la BD existe
+    db_dir = get_database_dir()
+    db_dir.mkdir(parents=True, exist_ok=True)
 
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    # Convertir Path a string para compatibilidad con sqlite3
+    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
 
     # Enable foreign keys and WAL mode
     conn.execute("PRAGMA foreign_keys = ON;")
@@ -93,7 +81,7 @@ def ensure_database_exists():
     If tables are missing, they will be created.
     """
     # STEP 1: Si no existe el archivo → inicializar todo
-    if not os.path.exists(DB_PATH):
+    if not DB_PATH.exists():
         print(f"[init_db] Database file not found. Creating at: {DB_PATH}")
         init_database()
         return
@@ -123,4 +111,28 @@ def ensure_database_exists():
 # ============================================================
 
 if __name__ == "__main__":
+    print("=" * 60)
+    print("PRUEBA DE INICIALIZACIÓN DE BASE DE DATOS")
+    print("=" * 60)
+    print(f"\n📄 Ruta de la BD: {DB_PATH}")
+    print(f"📁 Directorio de BD: {get_database_dir()}")
+    
     ensure_database_exists()
+    
+    # Verificar que se creó
+    if DB_PATH.exists():
+        print(f"\n✅ Base de datos creada exitosamente")
+        print(f"   Tamaño: {DB_PATH.stat().st_size} bytes")
+        
+        # Listar tablas
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+        tables = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        
+        print(f"   Tablas creadas: {', '.join(tables)}")
+    else:
+        print("\n❌ Error: La base de datos no se creó")
+    
+    print("=" * 60)
