@@ -1,9 +1,10 @@
-mediapipe
-opencv-python
-numpy
-matplotlib
-pandas
-reportlab
 streamlit
-protobuf
+opencv-python-headless
+mediapipe
+numpy
+pandas
+matplotlib
+reportlab
 streamlit-webrtc
+av
+protobuf
