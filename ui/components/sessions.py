@@ -432,11 +432,9 @@ def app():
         with col_sel[1]:
             selected_exercise = st.selectbox("Ejercicio", list(exercise_options.keys()))
         with col_sel[2]:
-            source_mode = st.selectbox(
-                "Fuente",
-                ["Webcam (WebRTC)", "Subir vídeo"],
-                index=0 if _WEBRTC_OK else 1
-            )
+            # Solo "Subir vídeo" en Streamlit Cloud
+            source_mode = "Subir vídeo"
+            st.info("📹 Webcam en vivo solo disponible en instalación local. Usa 'Subir vídeo'.")
 
         notes = st.text_area("Observaciones clínicas (opcional)")
         

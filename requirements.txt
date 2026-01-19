@@ -5,6 +5,4 @@ numpy
 pandas
 matplotlib
 reportlab
-streamlit-webrtc
-av
 protobuf
