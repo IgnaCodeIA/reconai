@@ -10,17 +10,7 @@ from db.init_db import get_connection
 from db import crud
 
 
-# ----------------------------
-# Helpers de datos
-# ----------------------------
 def _fetch_session_bundle(session_id: int) -> Dict:
-    """
-    Devuelve un dict con datos de sesión + paciente + ejercicio.
-    Keys:
-      id, datetime, video_path, notes,
-      patient_id, patient_name, patient_age, patient_gender,
-      exercise_id, exercise_name
-    """
     with get_connection() as conn:
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
@@ -51,12 +41,6 @@ def _fetch_session_bundle(session_id: int) -> Dict:
 
 
 def _metrics_by_series(session_id: int) -> Dict[str, Dict[str, any]]:
-    """
-    Devuelve un mapa: { serie_base: {min: x, max: y, range: z, unit: 'degrees'|'pixels'} }
-    a partir de filas (metric_name, metric_value, unit).
-    
-    NUEVO: Agrupa métricas de simetría y preserva unidades.
-    """
     rows = crud.get_metrics_by_session(session_id) or []
     series: Dict[str, Dict[str, any]] = {}
 
@@ -64,7 +48,6 @@ def _metrics_by_series(session_id: int) -> Dict[str, Dict[str, any]]:
         if not isinstance(name, str):
             continue
         
-        # Esperado: "<serie>_(min|max|range)"
         if name.endswith("_min"):
             base, key = name[:-4], "min"
         elif name.endswith("_max"):
@@ -72,7 +55,6 @@ def _metrics_by_series(session_id: int) -> Dict[str, Dict[str, any]]:
         elif name.endswith("_range"):
             base, key = name[:-6], "range"
         else:
-            # ignorar otras métricas de depuración o nombres no estándar
             continue
 
         try:
@@ -86,7 +68,6 @@ def _metrics_by_series(session_id: int) -> Dict[str, Dict[str, any]]:
         series.setdefault(base, {})
         series[base][key] = v
         
-        # Preservar unidad (la primera que encontremos para esta serie)
         if "unit" not in series[base] and unit:
             series[base]["unit"] = unit
 
@@ -94,14 +75,6 @@ def _metrics_by_series(session_id: int) -> Dict[str, Dict[str, any]]:
 
 
 def _separate_metrics_by_type(series_map: Dict[str, Dict[str, any]]) -> Tuple[Dict, Dict]:
-    """
-    Separa las métricas en dos grupos:
-    - Métricas angulares (ángulos articulares)
-    - Métricas de simetría
-    
-    Returns:
-        (angular_metrics, symmetry_metrics)
-    """
     angular = {}
     symmetry = {}
     
@@ -114,9 +87,6 @@ def _separate_metrics_by_type(series_map: Dict[str, Dict[str, any]]) -> Tuple[Di
     return angular, symmetry
 
 
-# ----------------------------
-# Gráficos (matplotlib)
-# ----------------------------
 def _figure_to_png_bytes(fig) -> bytes:
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=200, bbox_inches="tight")
@@ -126,7 +96,6 @@ def _figure_to_png_bytes(fig) -> bytes:
 
 
 def _chart_ranges(series_map: Dict[str, Dict[str, float]], title: str = "Rango por serie") -> bytes:
-    """Gráfico de barras: range por serie."""
     labels, values = [], []
     for serie, stats in sorted(series_map.items()):
         if "range" in stats:
@@ -134,7 +103,6 @@ def _chart_ranges(series_map: Dict[str, Dict[str, float]], title: str = "Rango p
             values.append(stats["range"])
 
     if not labels:
-        # gráfico vacío "placeholder"
         fig = plt.figure(figsize=(6, 3))
         plt.title(title)
         plt.text(0.5, 0.5, "Sin datos de 'range'", ha="center", va="center")
@@ -144,7 +112,6 @@ def _chart_ranges(series_map: Dict[str, Dict[str, float]], title: str = "Rango p
     plt.title(title)
     plt.bar(labels, values, color='steelblue')
     
-    # Etiqueta del eje Y según tipo de métrica
     if labels and labels[0].startswith("symmetry_") and "_y" in labels[0]:
         plt.ylabel("pixels")
     else:
@@ -156,7 +123,6 @@ def _chart_ranges(series_map: Dict[str, Dict[str, float]], title: str = "Rango p
 
 
 def _chart_min_max(series_map: Dict[str, Dict[str, float]], title: str = "Min y Max por serie") -> bytes:
-    """Gráfico de barras dobles: min y max por serie."""
     labels, mins, maxs = [], [], []
     for serie, stats in sorted(series_map.items()):
         if "min" in stats or "max" in stats:
@@ -179,7 +145,6 @@ def _chart_min_max(series_map: Dict[str, Dict[str, float]], title: str = "Min y 
     plt.bar(x - width / 2, mins, width, label="min", color='lightcoral')
     plt.bar(x + width / 2, maxs, width, label="max", color='lightgreen')
     
-    # Etiqueta del eje Y según tipo de métrica
     if labels and labels[0].startswith("symmetry_") and "_y" in labels[0]:
         plt.ylabel("pixels")
     else:
@@ -192,17 +157,12 @@ def _chart_min_max(series_map: Dict[str, Dict[str, float]], title: str = "Min y 
 
 
 def _chart_symmetry_overview(symmetry_map: Dict[str, Dict[str, float]]) -> bytes:
-    """
-    Gráfico específico para visualización de simetrías.
-    Muestra el valor máximo (peor asimetría detectada) para cada métrica.
-    """
     if not symmetry_map:
         fig = plt.figure(figsize=(6, 3))
         plt.title("Análisis de Simetría Bilateral")
         plt.text(0.5, 0.5, "Sin datos de simetría", ha="center", va="center")
         return _figure_to_png_bytes(fig)
     
-    # Separar angulares de posicionales
     angular_labels, angular_values = [], []
     positional_labels, positional_values = [], []
     
@@ -212,24 +172,21 @@ def _chart_symmetry_overview(symmetry_map: Dict[str, Dict[str, float]]) -> bytes
         
         label = serie.replace("symmetry_", "").replace("_", " ").title()
         
-        if "_y" in serie:  # Posicional
+        if "_y" in serie:
             positional_labels.append(label)
             positional_values.append(stats["max"])
-        else:  # Angular
+        else:
             angular_labels.append(label)
             angular_values.append(stats["max"])
     
-    # Crear figura con 2 subplots si hay ambos tipos
     if angular_values and positional_values:
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
         
-        # Subplot 1: Simetrías angulares
         ax1.barh(angular_labels, angular_values, color='cornflowerblue')
         ax1.set_xlabel('Asimetría máxima (degrees)')
         ax1.set_title('Simetría Angular')
         ax1.invert_yaxis()
         
-        # Subplot 2: Simetrías posicionales
         ax2.barh(positional_labels, positional_values, color='coral')
         ax2.set_xlabel('Asimetría máxima (pixels)')
         ax2.set_title('Simetría Posicional')
@@ -237,7 +194,6 @@ def _chart_symmetry_overview(symmetry_map: Dict[str, Dict[str, float]]) -> bytes
         
         plt.tight_layout()
     else:
-        # Solo un tipo de métrica
         fig = plt.figure(figsize=(8, 4))
         if angular_values:
             plt.barh(angular_labels, angular_values, color='cornflowerblue')
@@ -253,17 +209,9 @@ def _chart_symmetry_overview(symmetry_map: Dict[str, Dict[str, float]]) -> bytes
     return _figure_to_png_bytes(fig)
 
 
-# ----------------------------
-# PDF (ReportLab con fallback a PdfPages)
-# ----------------------------
 def _build_pdf_reportlab(bundle: Dict, series_map: Dict[str, Dict[str, float]],
                          png_ranges: bytes, png_minmax: bytes, 
                          png_symmetry: bytes = None) -> bytes:
-    """
-    Genera PDF usando ReportLab con soporte para métricas de simetría.
-    
-    NUEVO: Incluye gráfico de simetrías y tablas separadas por tipo de métrica.
-    """
     from reportlab.lib.pagesizes import A4
     from reportlab.lib import colors
     from reportlab.lib.styles import getSampleStyleSheet
@@ -274,9 +222,6 @@ def _build_pdf_reportlab(bundle: Dict, series_map: Dict[str, Dict[str, float]],
     styles = getSampleStyleSheet()
     story = []
 
-    # ============================================================
-    # 1. DATOS DEL PACIENTE
-    # ============================================================
     story.append(Paragraph("<b>1. Datos del paciente</b>", styles["Heading2"]))
     p_age = bundle.get("patient_age")
     p_gender = bundle.get("patient_gender")
@@ -286,9 +231,6 @@ def _build_pdf_reportlab(bundle: Dict, series_map: Dict[str, Dict[str, float]],
     story.append(Paragraph(f"Género: {p_gender or '—'}", styles["BodyText"]))
     story.append(Spacer(1, 12))
 
-    # ============================================================
-    # 2. DETALLES DE LA SESIÓN
-    # ============================================================
     story.append(Paragraph("<b>2. Detalles de la sesión</b>", styles["Heading2"]))
     dt = bundle.get("datetime")
     story.append(Paragraph(f"ID sesión: {bundle.get('id')}", styles["BodyText"]))
@@ -298,15 +240,10 @@ def _build_pdf_reportlab(bundle: Dict, series_map: Dict[str, Dict[str, float]],
     story.append(Paragraph(f"Vídeo asociado: {bundle.get('video_path') or '—'}", styles["BodyText"]))
     story.append(Spacer(1, 12))
 
-    # ============================================================
-    # 3. RESUMEN DE MÉTRICAS (TABLAS SEPARADAS)
-    # ============================================================
     story.append(Paragraph("<b>3. Resumen de métricas</b>", styles["Heading2"]))
     
-    # Separar métricas por tipo
     angular_metrics, symmetry_metrics = _separate_metrics_by_type(series_map)
     
-    # Tabla 3.1: Métricas Angulares
     if angular_metrics:
         story.append(Paragraph("<b>3.1 Ángulos Articulares</b>", styles["Heading3"]))
         table_data = [["Serie", "Métrica", "Valor", "Unidad"]]
@@ -333,7 +270,6 @@ def _build_pdf_reportlab(bundle: Dict, series_map: Dict[str, Dict[str, float]],
         story.append(tbl)
         story.append(Spacer(1, 12))
     
-    # Tabla 3.2: Métricas de Simetría
     if symmetry_metrics:
         story.append(Paragraph("<b>3.2 Análisis de Simetría Bilateral</b>", styles["Heading3"]))
         story.append(Paragraph(
@@ -366,18 +302,13 @@ def _build_pdf_reportlab(bundle: Dict, series_map: Dict[str, Dict[str, float]],
         story.append(tbl)
         story.append(Spacer(1, 12))
 
-    # ============================================================
-    # 4. VISUALIZACIONES
-    # ============================================================
     story.append(Paragraph("<b>4. Visualizaciones</b>", styles["Heading2"]))
     
-    # Gráfico de simetría (si existe)
     if png_symmetry and symmetry_metrics:
         story.append(Paragraph("<b>4.1 Análisis de Simetría Bilateral</b>", styles["Heading3"]))
         story.append(Image(io.BytesIO(png_symmetry), width=480, height=260))
         story.append(Spacer(1, 12))
     
-    # Gráficos de ángulos articulares
     if angular_metrics:
         story.append(Paragraph("<b>4.2 Rango de Movimiento Articular</b>", styles["Heading3"]))
         story.append(Image(io.BytesIO(png_ranges), width=480, height=260))
@@ -385,38 +316,6 @@ def _build_pdf_reportlab(bundle: Dict, series_map: Dict[str, Dict[str, float]],
         story.append(Paragraph("<b>4.3 Valores Mínimos y Máximos</b>", styles["Heading3"]))
         story.append(Image(io.BytesIO(png_minmax), width=480, height=260))
         story.append(PageBreak())
-
-    # ============================================================
-    # 5. INTERPRETACIÓN CLÍNICA (NUEVO)
-    # ============================================================
-    if symmetry_metrics:
-        story.append(Paragraph("<b>5. Interpretación Clínica</b>", styles["Heading2"]))
-        story.append(Paragraph(
-            "<b>Análisis de Simetría:</b> Las métricas de simetría bilateral permiten detectar "
-            "descompensaciones posturales y de movimiento entre los lados derecho e izquierdo del cuerpo. "
-            "Valores elevados pueden indicar:",
-            styles["BodyText"]
-        ))
-        story.append(Spacer(1, 6))
-        story.append(Paragraph("• Asimetría postural estructural", styles["BodyText"]))
-        story.append(Paragraph("• Compensaciones por dolor o lesión", styles["BodyText"]))
-        story.append(Paragraph("• Patrones de movimiento disfuncionales", styles["BodyText"]))
-        story.append(Paragraph("• Necesidad de trabajo correctivo unilateral", styles["BodyText"]))
-        story.append(Spacer(1, 12))
-
-    # ============================================================
-    # 6. GENERACIÓN DEL DOCUMENTO
-    # ============================================================
-    story.append(Paragraph("<b>6. Generación del documento</b>", styles["Heading2"]))
-    story.append(Paragraph("Generado por: <b>Recon IA - Sistema de Análisis Biomecánico</b>", styles["BodyText"]))
-    story.append(Paragraph(
-        f"Fecha de generación: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}", 
-        styles["BodyText"]
-    ))
-    story.append(Paragraph(
-        "Este informe contiene datos procesados mediante MediaPipe Pose y análisis biomecánico avanzado.",
-        styles["BodyText"]
-    ))
 
     doc.build(story)
     buf.seek(0)
@@ -426,19 +325,11 @@ def _build_pdf_reportlab(bundle: Dict, series_map: Dict[str, Dict[str, float]],
 def _build_pdf_fallback_matplotlib(bundle: Dict, series_map: Dict[str, Dict[str, float]],
                                    png_ranges: bytes, png_minmax: bytes,
                                    png_symmetry: bytes = None) -> bytes:
-    """
-    Fallback si no hay reportlab: generamos un PDF multipágina con matplotlib.
-    
-    NUEVO: Incluye página de simetrías.
-    """
     from matplotlib.backends.backend_pdf import PdfPages
 
     buf = io.BytesIO()
     with PdfPages(buf) as pdf:
-        # ============================================================
-        # Página 1: Información general
-        # ============================================================
-        fig = plt.figure(figsize=(8.27, 11.69))  # A4
+        fig = plt.figure(figsize=(8.27, 11.69))
         plt.axis("off")
 
         y = 0.95
@@ -465,7 +356,6 @@ def _build_pdf_fallback_matplotlib(bundle: Dict, series_map: Dict[str, Dict[str,
         t(f"Notas clínicas: {bundle.get('notes') or '—'}")
         y -= 0.02
         
-        # Separar métricas
         angular_metrics, symmetry_metrics = _separate_metrics_by_type(series_map)
         
         t("3. Resumen de métricas", bold=True)
@@ -491,9 +381,6 @@ def _build_pdf_fallback_matplotlib(bundle: Dict, series_map: Dict[str, Dict[str,
         pdf.savefig(fig)
         plt.close(fig)
 
-        # ============================================================
-        # Página 2: Gráfico de simetría (si existe)
-        # ============================================================
         if png_symmetry and symmetry_metrics:
             fig2 = plt.figure(figsize=(8.27, 5.5))
             img = plt.imread(io.BytesIO(png_symmetry))
@@ -503,9 +390,6 @@ def _build_pdf_fallback_matplotlib(bundle: Dict, series_map: Dict[str, Dict[str,
             pdf.savefig(fig2)
             plt.close(fig2)
 
-        # ============================================================
-        # Página 3: Rango por serie
-        # ============================================================
         if angular_metrics:
             fig3 = plt.figure(figsize=(8.27, 5.5))
             img2 = plt.imread(io.BytesIO(png_ranges))
@@ -515,9 +399,6 @@ def _build_pdf_fallback_matplotlib(bundle: Dict, series_map: Dict[str, Dict[str,
             pdf.savefig(fig3)
             plt.close(fig3)
 
-            # ============================================================
-            # Página 4: Min/Max por serie
-            # ============================================================
             fig4 = plt.figure(figsize=(8.27, 5.5))
             img3 = plt.imread(io.BytesIO(png_minmax))
             plt.imshow(img3)
@@ -530,36 +411,20 @@ def _build_pdf_fallback_matplotlib(bundle: Dict, series_map: Dict[str, Dict[str,
     return buf.getvalue()
 
 
-# ----------------------------
-# API principal
-# ----------------------------
 def generate_session_report_pdf(session_id: int) -> bytes:
-    """
-    Genera el informe PDF de la sesión (binario).
-    - Usa métricas ya almacenadas (ángulos articulares + simetrías).
-    - Crea gráficos específicos para cada tipo de métrica.
-    - Incluye interpretación clínica de simetrías.
-    
-    NUEVO: Soporte completo para métricas de simetría bilateral.
-    """
     bundle = _fetch_session_bundle(session_id)
     series_map = _metrics_by_series(session_id)
     
-    # Separar métricas por tipo
     angular_metrics, symmetry_metrics = _separate_metrics_by_type(series_map)
 
-    # Generar gráficos
     png_ranges = _chart_ranges(angular_metrics, "Rango de Movimiento Articular")
     png_minmax = _chart_min_max(angular_metrics, "Valores Mínimos y Máximos")
     
-    # Gráfico de simetría (solo si hay datos)
     png_symmetry = None
     if symmetry_metrics:
         png_symmetry = _chart_symmetry_overview(symmetry_metrics)
 
-    # Intentar ReportLab primero
     try:
         return _build_pdf_reportlab(bundle, series_map, png_ranges, png_minmax, png_symmetry)
     except Exception:
-        # Fallback sin dependencia
         return _build_pdf_fallback_matplotlib(bundle, series_map, png_ranges, png_minmax, png_symmetry)

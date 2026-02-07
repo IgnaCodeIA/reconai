@@ -50,6 +50,8 @@ class SessionManager:
         if output_dir is None:
             output_dir = str(get_exports_dir() / "videos")
         self.output_dir = output_dir
+        os.makedirs(self.output_dir, exist_ok=True)
+        log.info(f"Directorio de salida: {self.output_dir}")
         
         # NUEVO: 3 VideoWriters (uno por cada versión) O FFmpeg pipes
         self.video_writer_raw: cv2.VideoWriter | None = None

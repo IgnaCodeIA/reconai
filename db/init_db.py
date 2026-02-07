@@ -21,9 +21,23 @@ from db import models
 DB_PATH = get_db_path()
 
 # Lista derivada automáticamente del módulo models
+# CORREGIDO: Manejar "CREATE TABLE IF NOT EXISTS nombre" correctamente
+def _extract_table_name(stmt):
+    """Extrae el nombre de tabla de una sentencia CREATE TABLE."""
+    parts = stmt.split()
+    try:
+        # Buscar "TABLE" y obtener el siguiente token que no sea IF/NOT/EXISTS
+        idx = parts.index("TABLE")
+        for i in range(idx + 1, len(parts)):
+            if parts[i] not in ("IF", "NOT", "EXISTS"):
+                # Remover paréntesis si los hay
+                return parts[i].replace("(", "").strip()
+    except (ValueError, IndexError):
+        pass
+    return None
+
 REQUIRED_TABLE_NAMES = [
-    stmt.split()[2]   # Extrae el nombre después de "CREATE TABLE IF NOT EXISTS X"
-    for stmt in models.TABLES
+    name for name in (_extract_table_name(stmt) for stmt in models.TABLES) if name
 ]
 
 

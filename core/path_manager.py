@@ -105,25 +105,10 @@ def get_temp_dir() -> Path:
 
 
 def get_exports_dir() -> Path:
-    """
-    Carpeta para videos/imágenes procesados (salidas finales).
-    
-    Estructura:
-    - exports/videos/  → Videos procesados
-    - exports/images/  → Imágenes procesadas
-    
-    Returns:
-        Path: Directorio de exportaciones
-    """
-    exports = get_app_data_dir() / 'exports'
-    exports.mkdir(exist_ok=True)
-    
-    # Crear subdirectorios
-    (exports / 'videos').mkdir(exist_ok=True)
-    (exports / 'images').mkdir(exist_ok=True)
-    
+    """Retorna el directorio para exportaciones de video."""
+    exports = get_app_data_dir() / "exports"  # 
+    exports.mkdir(parents=True, exist_ok=True)
     return exports
-
 
 def get_database_dir() -> Path:
     """
