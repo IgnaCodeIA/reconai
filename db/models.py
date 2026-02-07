@@ -142,6 +142,24 @@ CREATE TABLE IF NOT EXISTS metrics (
 """
 
 # ============================================================
+# FEEDBACK
+# ============================================================
+
+CREATE_TABLE_FEEDBACK = """
+CREATE TABLE IF NOT EXISTS feedback (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    component TEXT NOT NULL,
+    feedback_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    user_agent TEXT,
+    screen_resolution TEXT,
+    status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'reviewed', 'resolved')),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+# ============================================================
 # TABLE REGISTRY
 # ============================================================
 
@@ -151,4 +169,5 @@ TABLES = [
     CREATE_TABLE_SESSIONS,
     CREATE_TABLE_MOVEMENT_DATA,
     CREATE_TABLE_METRICS,
+    CREATE_TABLE_FEEDBACK,
 ]
