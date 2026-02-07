@@ -1,17 +1,11 @@
-# core/logger.py
 import logging
 import os
 import sys
 
 def get_logger(name: str = "reconia"):
-    """
-    Logger compartido: escribe a consola (INFO) y a fichero (DEBUG).
-    Fichero: data/logs/reconia.log
-    """
     logger = logging.getLogger(name)
     if logger.handlers:
-      # Ya configurado
-      return logger
+        return logger
 
     logger.setLevel(logging.DEBUG)
     os.makedirs("data/logs", exist_ok=True)

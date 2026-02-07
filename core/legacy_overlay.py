@@ -1,32 +1,20 @@
-# core/legacy_overlay.py
 import cv2
 
-# Colores
-C_LINE = (0, 255, 0)       # segmentos verdes
-C_TORSO = (0, 255, 255)    # torso amarillo
-C_POINT = (0, 0, 255)      # puntos rojos
-C_FOOT = (0, 0, 255)       # líneas de pie rojas (como en script original)
-C_TEXT_OK = (0, 255, 0)    # texto OK
-C_TEXT_WARN = (0, 0, 255)  # texto alerta
-C_INFO = (255, 0, 0)       # texto info azul
+C_LINE = (0, 255, 0)
+C_TORSO = (0, 255, 255)
+C_POINT = (0, 0, 255)
+C_FOOT = (0, 0, 255)
+C_TEXT_OK = (0, 255, 0)
+C_TEXT_WARN = (0, 0, 255)
+C_INFO = (255, 0, 0)
 
 def _p(lm, name, w, h):
-    """Devuelve punto (x,y) en píxeles a partir de lm[name]=(x,y,...) normalizado."""
     x, y = lm[name][0], lm[name][1]
     return int(x * w), int(y * h)
 
 def draw_legacy_overlay(image_bgr, lm: dict, w: int, h: int, angles: dict,
                         a_max: float = 60.0, sequence: int = None, 
                         frame_idx: int = None, fps: int = None):
-    """
-    Dibuja el estilo 'legacy' del cliente sobre image_bgr.
-
-    lm: dict de landmarks normalizados (PoseDetector.extract_landmarks)
-    angles: {'angle_arm_r': float, 'angle_arm_l': float, 'angle_leg_r': float, 'angle_leg_l': float}
-    sequence: número de secuencia actual (NUEVO - estilo Phiteca)
-    frame_idx: número de frame actual (opcional, para mostrar en overlay)
-    fps: frames por segundo (opcional, para mostrar en overlay)
-    """
     need = [
         "RIGHT_HIP", "RIGHT_KNEE", "RIGHT_ANKLE",
         "LEFT_HIP", "LEFT_KNEE", "LEFT_ANKLE",
@@ -35,14 +23,12 @@ def draw_legacy_overlay(image_bgr, lm: dict, w: int, h: int, angles: dict,
         "RIGHT_HEEL", "RIGHT_FOOT_INDEX", "LEFT_HEEL", "LEFT_FOOT_INDEX",
     ]
     if any(k not in lm for k in need):
-        # Si no hay landmarks completos, al menos dibujar secuencia si existe
         if sequence is not None:
             cv2.rectangle(image_bgr, (15, 5), (250, 40), (250, 250, 250), -1)
             cv2.putText(image_bgr, f'Secuencia: {sequence}', (20, 30), 
                        cv2.FONT_HERSHEY_SIMPLEX, 1, C_INFO, 1, cv2.LINE_AA)
         return image_bgr
 
-    # Píxeles - Brazos
     SH_R = _p(lm, "RIGHT_SHOULDER", w, h)
     EL_R = _p(lm, "RIGHT_ELBOW", w, h)
     WR_R = _p(lm, "RIGHT_WRIST", w, h)
@@ -51,7 +37,6 @@ def draw_legacy_overlay(image_bgr, lm: dict, w: int, h: int, angles: dict,
     EL_L = _p(lm, "LEFT_ELBOW", w, h)
     WR_L = _p(lm, "LEFT_WRIST", w, h)
 
-    # Píxeles - Piernas
     HIP_R = _p(lm, "RIGHT_HIP", w, h)
     KN_R  = _p(lm, "RIGHT_KNEE", w, h)
     AN_R  = _p(lm, "RIGHT_ANKLE", w, h)
@@ -60,13 +45,11 @@ def draw_legacy_overlay(image_bgr, lm: dict, w: int, h: int, angles: dict,
     KN_L  = _p(lm, "LEFT_KNEE", w, h)
     AN_L  = _p(lm, "LEFT_ANKLE", w, h)
 
-    # Píxeles - Pies (NUEVO)
     HE_R  = _p(lm, "RIGHT_HEEL", w, h)
     FI_R  = _p(lm, "RIGHT_FOOT_INDEX", w, h)
     HE_L  = _p(lm, "LEFT_HEEL", w, h)
     FI_L  = _p(lm, "LEFT_FOOT_INDEX", w, h)
 
-    # --- Piernas (segmentos + puntos)
     cv2.line(image_bgr, HIP_R, KN_R, C_LINE, 2)
     cv2.line(image_bgr, KN_R, AN_R, C_LINE, 2)
     cv2.circle(image_bgr, HIP_R, 5, C_POINT, -1)
@@ -79,22 +62,18 @@ def draw_legacy_overlay(image_bgr, lm: dict, w: int, h: int, angles: dict,
     cv2.circle(image_bgr, KN_L, 5, C_POINT, -1)
     cv2.circle(image_bgr, AN_L, 5, C_POINT, -1)
 
-    # --- Pies (triángulo talón-punta-tobillo) - COMO EN SCRIPT ORIGINAL
-    # Pie derecho
     cv2.line(image_bgr, AN_R, HE_R, C_FOOT, 2)
     cv2.line(image_bgr, HE_R, FI_R, C_FOOT, 2)
     cv2.line(image_bgr, FI_R, AN_R, C_FOOT, 2)
     cv2.circle(image_bgr, HE_R, 5, C_POINT, -1)
     cv2.circle(image_bgr, FI_R, 5, C_POINT, -1)
 
-    # Pie izquierdo
     cv2.line(image_bgr, AN_L, HE_L, C_FOOT, 2)
     cv2.line(image_bgr, HE_L, FI_L, C_FOOT, 2)
     cv2.line(image_bgr, FI_L, AN_L, C_FOOT, 2)
     cv2.circle(image_bgr, HE_L, 5, C_POINT, -1)
     cv2.circle(image_bgr, FI_L, 5, C_POINT, -1)
 
-    # --- Brazos (segmentos + puntos)
     cv2.line(image_bgr, SH_R, EL_R, C_LINE, 2)
     cv2.line(image_bgr, EL_R, WR_R, C_LINE, 2)
     cv2.circle(image_bgr, SH_R, 5, C_POINT, -1)
@@ -107,26 +86,22 @@ def draw_legacy_overlay(image_bgr, lm: dict, w: int, h: int, angles: dict,
     cv2.circle(image_bgr, EL_L, 5, C_POINT, -1)
     cv2.circle(image_bgr, WR_L, 5, C_POINT, -1)
 
-    # --- Torso: hombro-hombro, cadera-cadera, y cierre
     cv2.line(image_bgr, SH_R, SH_L, C_TORSO, 2)
     cv2.line(image_bgr, SH_L, HIP_L, C_TORSO, 2)
     cv2.line(image_bgr, HIP_L, HIP_R, C_TORSO, 2)
     cv2.line(image_bgr, HIP_R, SH_R, C_TORSO, 2)
 
-    # Líneas horizontales finas en hombros y caderas (estética legacy)
     def _hline(center, half=200):
         x, y = center
         cv2.line(image_bgr, (x - half, y), (x + half, y), (100, 0, 255), 1)
     _hline(SH_R); _hline(SH_L); _hline(HIP_R); _hline(HIP_L)
 
-    # Punto medio hombros y caderas + línea entre ambos (COLUMNA VERTEBRAL)
     mid_sh = ((SH_R[0] + SH_L[0]) // 2, (SH_R[1] + SH_L[1]) // 2)
     mid_hp = ((HIP_R[0] + HIP_L[0]) // 2, (HIP_R[1] + HIP_L[1]) // 2)
     cv2.circle(image_bgr, mid_sh, 5, (0, 0, 255), -1)
     cv2.circle(image_bgr, mid_hp, 5, (0, 0, 255), -1)
     cv2.line(image_bgr, mid_sh, mid_hp, (255, 255, 0), 2)
 
-    # --- Textos de ángulo en las articulaciones
     a_arm_r = angles.get("angle_arm_r")
     a_arm_l = angles.get("angle_arm_l")
     a_leg_r = angles.get("angle_leg_r")
@@ -144,20 +119,13 @@ def draw_legacy_overlay(image_bgr, lm: dict, w: int, h: int, angles: dict,
     if a_leg_l is not None:
         _put(str(int(round(a_leg_l))), (KN_L[0], KN_L[1]), ok=False)
 
-    # ============================================================
-    # NUEVO: CONTADOR DE SECUENCIA (estilo Phiteca original)
-    # ============================================================
-    # Rectángulo blanco de fondo (estilo original: posición (15, 5) a (250, 40))
     cv2.rectangle(image_bgr, (15, 5), (250, 40), (250, 250, 250), -1)
     
-    # Texto "Secuencia: X" en azul (color original: (255, 0, 0) = azul en BGR)
     if sequence is not None:
         cv2.putText(image_bgr, f'Secuencia: {sequence}', (20, 30), 
                    cv2.FONT_HERSHEY_SIMPLEX, 1, C_INFO, 1, cv2.LINE_AA)
 
-    # --- Información adicional de sesión (opcional, en otra caja)
     if frame_idx is not None or fps is not None:
-        # Segundo rectángulo para info adicional
         cv2.rectangle(image_bgr, (15, 45), (280, 95), (250, 250, 250), -1)
         
         y_pos = 70
