@@ -1,4 +1,3 @@
-# reports/pdf_report.py
 import io
 import datetime
 import sqlite3
