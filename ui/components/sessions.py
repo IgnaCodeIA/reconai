@@ -1,4 +1,3 @@
-# ui/components/sessions.py
 import os
 import tempfile
 import datetime
@@ -7,6 +6,11 @@ import cv2
 import numpy as np
 import streamlit as st
 from pathlib import Path
+import warnings
+import logging
+
+warnings.filterwarnings("ignore", message=".*ScriptRunContext.*")
+logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").setLevel(logging.ERROR)
 
 from db import crud
 from core.session_manager import SessionManager
@@ -29,7 +33,7 @@ try:
     )
     _WEBRTC_OK = True
 except ImportError as e:
-    print(f"⚠️ Error importando WebRTC: {e}")
+    print(f"Error importando WebRTC: {e}")
     av = None
     _WEBRTC_OK = False
 
@@ -161,7 +165,7 @@ def _extract_joint_data(lm, w, h):
         return joint_data, angles
         
     except KeyError as e:
-        print(f"⚠️ Landmarks incompletos, falta: {e}")
+        print(f"Landmarks incompletos, falta: {e}")
         return None, {}
 
 def _preinitialize_session(patient_id, exercise_id, notes, sampling_rate,
@@ -186,26 +190,38 @@ def _preinitialize_session(patient_id, exercise_id, notes, sampling_rate,
         
         session_id = session_mgr.start_session(DEFAULT_WIDTH, DEFAULT_HEIGHT, TARGET_FPS)
         
-        log.info(f"✅ Sesión pre-inicializada: ID={session_id}")
+        log.info(f"Sesión pre-inicializada: ID={session_id}")
         
         return session_mgr
         
     except Exception as e:
-        log.error(f"❌ Error en pre-inicialización: {e}")
+        log.error(f"Error en pre-inicialización: {e}")
         raise
 
 class Processor(VideoProcessorBase):
     
     def __init__(self, session_mgr: SessionManager):
         self.session_mgr = session_mgr
-        self.detector = PoseDetector()
+        self.detector = None
         self.frame_idx = 0
         self.started = True
         self.sid = self.session_mgr.session_id
-        log.info(f"✅ Processor creado con sesión pre-inicializada ID={self.sid}")
+        self.is_closed = False
+        log.info(f"Processor creado con sesión pre-inicializada ID={self.sid}")
 
     def recv(self, frame: "av.VideoFrame") -> "av.VideoFrame":
         try:
+            if self.is_closed:
+                black_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                cv2.putText(black_frame, "Sesion finalizada", (150, 240), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                return av.VideoFrame.from_ndarray(black_frame, format="bgr24")
+            
+            if self.detector is None:
+                log.info("Inicializando PoseDetector en thread de WebRTC...")
+                self.detector = PoseDetector()
+                log.info("PoseDetector inicializado correctamente")
+            
             img_bgr = frame.to_ndarray(format="bgr24")
             h, w = img_bgr.shape[:2]
 
@@ -260,7 +276,7 @@ class Processor(VideoProcessorBase):
                     )
                 except Exception as e:
                     if self.frame_idx % 60 == 0:
-                        print(f"⚠️ Error BD frame {self.frame_idx}: {e}")
+                        print(f"Error BD frame {self.frame_idx}: {e}")
 
             if self.session_mgr:
                 try:
@@ -272,7 +288,7 @@ class Processor(VideoProcessorBase):
                     self.frame_idx += 1
                 except Exception as e:
                     if self.frame_idx % 60 == 0:
-                        print(f"⚠️ Error escritura frame {self.frame_idx}: {e}")
+                        print(f"Error escritura frame {self.frame_idx}: {e}")
 
             display_frame = frame_legacy if frame_legacy is not None else \
                            frame_mediapipe if frame_mediapipe is not None else \
@@ -283,22 +299,26 @@ class Processor(VideoProcessorBase):
             return av.VideoFrame.from_ndarray(display_frame, format="bgr24")
             
         except Exception as e:
-            print(f"❌ ERROR CRÍTICO en recv(): {e}")
-            import traceback
-            traceback.print_exc()
+            if not self.is_closed:
+                print(f"ERROR CRITICO en recv(): {e}")
+                import traceback
+                traceback.print_exc()
+            
             error_frame = np.zeros((480, 640, 3), dtype=np.uint8)
             cv2.putText(error_frame, "ERROR - Ver consola", (50, 240), 
                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
             return av.VideoFrame.from_ndarray(error_frame, format="bgr24")
 
     def close_and_save(self):
+        self.is_closed = True
         if self.session_mgr:
-            print(f"💾 Cerrando sesión ID={self.session_mgr.session_id}...")
+            print(f"Cerrando sesión ID={self.session_mgr.session_id}...")
             self.session_mgr.close_session()
             return self.session_mgr.session_id, self.session_mgr.get_video_paths()
         return None, (None, None, None)
 
     def close_and_discard(self):
+        self.is_closed = True
         sid, paths = None, (None, None, None)
         if self.session_mgr:
             sid = self.session_mgr.session_id
@@ -310,7 +330,7 @@ class Processor(VideoProcessorBase):
             if sid:
                 try:
                     crud.delete_session(sid)
-                    print(f"🗑️ Sesión {sid} descartada")
+                    print(f"Sesión {sid} descartada")
                 except Exception:
                     pass
             for path in paths:
@@ -322,8 +342,10 @@ class Processor(VideoProcessorBase):
         return sid, paths
 
     def release_models(self):
+        self.is_closed = True
         try:
-            self.detector.release()
+            if self.detector:
+                self.detector.release()
         except Exception:
             pass
 
@@ -371,27 +393,27 @@ def app():
         col_vid = st.columns(3)
         with col_vid[0]:
             generate_raw = st.checkbox(
-                "🎬 Sin procesar (RAW)", 
+                "Sin procesar (RAW)", 
                 value=False,
                 help="Vídeo original sin overlays"
             )
         with col_vid[1]:
             generate_mediapipe = st.checkbox(
-                "🤖 MediaPipe completo", 
+                "MediaPipe completo", 
                 value=False,
-                help="⚪ Fondo blanco + esqueleto de pose (33 puntos)"
+                help="Fondo blanco + esqueleto de pose (33 puntos)"
             )
         with col_vid[2]:
             generate_legacy = st.checkbox(
-                "⚕️ Overlay clínico", 
+                "Overlay clínico", 
                 value=True,
                 help="Barritas, puntos y ángulos (recomendado)"
             )
         
-        if st.checkbox("✅ Generar todas las versiones", value=False):
+        if st.checkbox("Generar todas las versiones", value=False):
             generate_raw = generate_mediapipe = generate_legacy = True
         
-        with st.expander("⚙️ Configuración avanzada"):
+        with st.expander("Configuración avanzada"):
             use_sampling = st.checkbox("Reducir frecuencia de muestreo", 
                                       help="Guarda menos frames en BD para ahorrar espacio")
             if use_sampling:
@@ -399,7 +421,7 @@ def app():
             else:
                 sampling_rate = 0.0
             
-            st.info(f"ℹ️ Los videos se grabarán a {TARGET_FPS} fps para óptima calidad y velocidad correcta")
+            st.info(f"Los videos se grabarán a {TARGET_FPS} fps para óptima calidad y velocidad correcta")
 
         if source_mode == "Webcam (WebRTC)" and not _WEBRTC_OK:
             st.info("Para usar la webcam en el navegador: `pip install streamlit-webrtc av`")
@@ -408,7 +430,7 @@ def app():
 
         if start_btn:
             if not (generate_raw or generate_mediapipe or generate_legacy):
-                st.error("⚠️ Debe seleccionar al menos una versión de vídeo")
+                st.error("Debe seleccionar al menos una versión de vídeo")
             else:
                 st.session_state["selected_patient"] = selected_patient
                 st.session_state["selected_exercise"] = selected_exercise
@@ -428,13 +450,13 @@ def app():
             st.error("streamlit-webrtc no está instalado.")
             return
 
-        st.subheader("📹 Grabación con webcam (en vivo)")
+        st.subheader("Grabación con webcam (en vivo)")
         
         versions = []
         if st.session_state.get("generate_raw"): versions.append("RAW")
-        if st.session_state.get("generate_mediapipe"): versions.append("⚪ MediaPipe (fondo blanco)")
+        if st.session_state.get("generate_mediapipe"): versions.append("MediaPipe (fondo blanco)")
         if st.session_state.get("generate_legacy"): versions.append("Clínico")
-        st.info(f"🎬 Generando versiones: {', '.join(versions)} @ {TARGET_FPS}fps")
+        st.info(f"Generando versiones: {', '.join(versions)} @ {TARGET_FPS}fps")
         
         st.markdown("""
         <style>
@@ -459,25 +481,25 @@ def app():
         
         with ctrl_cols[0]:
             if st.session_state.get("paused", False):
-                if st.button("▶️ Reanudar grabación", type="primary", use_container_width=True):
+                if st.button("Reanudar grabación", type="primary", use_container_width=True):
                     st.session_state["paused"] = False
                     st.rerun()
             else:
-                if st.button("⏸️ Pausar grabación", use_container_width=True):
+                if st.button("Pausar grabación", use_container_width=True):
                     st.session_state["paused"] = True
                     st.rerun()
         
         with ctrl_cols[1]:
-            if st.button("⏹️ Finalizar y guardar", type="secondary", use_container_width=True):
+            if st.button("Finalizar y guardar", type="secondary", use_container_width=True):
                 st.session_state["save_prompt"] = True
                 st.session_state["paused"] = True
                 st.rerun()
         
         with ctrl_cols[2]:
             if st.session_state.get("paused", False):
-                st.warning("⏸️ PAUSADO")
+                st.warning("PAUSADO")
             else:
-                st.success("🔴 GRABANDO")
+                st.success("GRABANDO")
         
         st.markdown("---")
 
@@ -497,16 +519,16 @@ def app():
         gen_leg = st.session_state.get("generate_legacy", True)
         
         if "webrtc_session_mgr" not in st.session_state:
-            with st.spinner("🔧 Preparando sistema de grabación..."):
+            with st.spinner("Preparando sistema de grabación..."):
                 try:
                     session_mgr = _preinitialize_session(
                         pid, eid, nts, sr, gen_raw, gen_mp, gen_leg
                     )
                     st.session_state["webrtc_session_mgr"] = session_mgr
-                    st.success("✅ Sistema listo para grabar")
+                    st.success("Sistema listo para grabar")
                     time.sleep(0.5)
                 except Exception as e:
-                    st.error(f"❌ Error al preparar grabación: {e}")
+                    st.error(f"Error al preparar grabación: {e}")
                     log.exception("Error en pre-inicialización")
                     st.stop()
         
@@ -531,7 +553,7 @@ def app():
 
         if st.session_state.get("save_prompt"):
             st.markdown("---")
-            st.markdown("### 💾 Finalizar sesión")
+            st.markdown("### Finalizar sesión")
             
             st.info(f"""
             **Sesión actual:**
@@ -540,12 +562,12 @@ def app():
             - Versiones generadas: {', '.join(versions)}
             """)
             
-            st.warning("⚠️ ¿Desea guardar esta sesión?")
+            st.warning("¿Desea guardar esta sesión?")
             
             bcols = st.columns([2, 2, 1])
             
             with bcols[0]:
-                if st.button("✅ Guardar sesión", type="primary", use_container_width=True):
+                if st.button("Guardar sesión", type="primary", use_container_width=True):
                     with st.spinner("Guardando sesión..."):
                         if ctx and ctx.video_processor:
                             sid, paths = ctx.video_processor.close_and_save()
@@ -555,14 +577,14 @@ def app():
                             except Exception:
                                 pass
                             if sid:
-                                st.success(f"✅ Sesión guardada correctamente (ID {sid})")
+                                st.success(f"Sesión guardada correctamente (ID {sid})")
                                 raw_path, mp_path, leg_path = paths
                                 if raw_path: 
-                                    st.caption(f"📹 RAW: {os.path.basename(raw_path)}")
+                                    st.caption(f"RAW: {os.path.basename(raw_path)}")
                                 if mp_path: 
-                                    st.caption(f"⚪ MediaPipe: {os.path.basename(mp_path)}")
+                                    st.caption(f"MediaPipe: {os.path.basename(mp_path)}")
                                 if leg_path: 
-                                    st.caption(f"⚕️ Clínico: {os.path.basename(leg_path)}")
+                                    st.caption(f"Clínico: {os.path.basename(leg_path)}")
                                 time.sleep(1.5)
                         
                         if "webrtc_session_mgr" in st.session_state:
@@ -572,7 +594,7 @@ def app():
                         st.rerun()
 
             with bcols[1]:
-                if st.button("🗑️ Descartar sesión", use_container_width=True):
+                if st.button("Descartar sesión", use_container_width=True):
                     with st.spinner("Descartando sesión..."):
                         if ctx and ctx.video_processor:
                             sid, paths = ctx.video_processor.close_and_discard()
@@ -591,7 +613,7 @@ def app():
                     st.rerun()
 
             with bcols[2]:
-                if st.button("↩️ Volver", use_container_width=True):
+                if st.button("Volver", use_container_width=True):
                     st.session_state["save_prompt"] = False
                     st.session_state["paused"] = False
                     st.rerun()

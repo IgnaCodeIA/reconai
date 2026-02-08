@@ -1,4 +1,3 @@
-# core/session_manager.py
 import os
 import time
 import math
@@ -16,20 +15,6 @@ log = get_logger("core.session")
 
 
 class SessionManager:
-    """
-    Gestiona una sesión de captura/análisis:
-    - Inicializa hasta 3 salidas de vídeo (raw, mediapipe, legacy)
-    - Registra datos por frame en movement_data
-    - Agrega métricas al cerrar (min, max, range de ángulos y simetrías)
-    
-    NUEVO: 
-    - Soporte para múltiples versiones de vídeo simultáneas
-    - Sampling rate configurable para reducir volumen de datos
-    - Métricas de simetría bilateral con unidades diferenciadas
-    - Contador de secuencia visible en los 3 tipos de vídeo
-    - FFmpeg para máxima calidad de vídeo (bitrate alto)
-    - FPS adaptativo para evitar aceleración
-    """
 
     def __init__(
         self,
@@ -39,13 +24,11 @@ class SessionManager:
         exercise_id: int | None = None,
         notes: str | None = None,
         sampling_rate: float = 0.0,
-        # NUEVO: Flags para controlar qué versiones generar
         generate_raw: bool = False,
         generate_mediapipe: bool = False,
         generate_legacy: bool = True,
-        # NUEVO: Control de calidad de video
-        use_ffmpeg: bool = True,  # Usar FFmpeg para máxima calidad
-        video_bitrate: str = "8000k",  # Bitrate muy alto para calidad profesional
+        use_ffmpeg: bool = True,
+        video_bitrate: str = "8000k",
     ):
         if output_dir is None:
             output_dir = str(get_exports_dir() / "videos")
@@ -53,12 +36,10 @@ class SessionManager:
         os.makedirs(self.output_dir, exist_ok=True)
         log.info(f"Directorio de salida: {self.output_dir}")
         
-        # NUEVO: 3 VideoWriters (uno por cada versión) O FFmpeg pipes
         self.video_writer_raw: cv2.VideoWriter | None = None
         self.video_writer_mediapipe: cv2.VideoWriter | None = None
         self.video_writer_legacy: cv2.VideoWriter | None = None
         
-        # FFmpeg processes (alternativa de alta calidad)
         self.ffmpeg_raw = None
         self.ffmpeg_mediapipe = None
         self.ffmpeg_legacy = None
@@ -72,31 +53,24 @@ class SessionManager:
         self.session_id: int | None = None
         self.notes = notes
         
-        # NUEVO: Rutas de los 3 vídeos
         self.video_path_raw: str | None = None
         self.video_path_mediapipe: str | None = None
         self.video_path_legacy: str | None = None
         
-        # Control de sampling
         self.sampling_rate = sampling_rate
         self.last_sample_time = 0.0
 
-        # Acumulador de métricas para agregación final
         self.metric_records: Dict[str, List[float]] = {}
 
-        # Contadores
         self._frames_written = 0
         self._frames_recorded_to_db = 0
         
-        # NUEVO: Contador de secuencia (estilo Phiteca)
         self.sequence_counter = 0
         
-        # NUEVO: Flags de configuración
         self.generate_raw = generate_raw
         self.generate_mediapipe = generate_mediapipe
         self.generate_legacy = generate_legacy
         
-        # NUEVO: Control de calidad
         self.use_ffmpeg = use_ffmpeg
         self.video_bitrate = video_bitrate
 
@@ -108,41 +82,24 @@ class SessionManager:
             self.use_ffmpeg, self.video_bitrate
         )
 
-    # ============================================================
-    # INICIALIZACIÓN
-    # ============================================================
-
     def _create_ffmpeg_writer(self, output_path: str, width: int, height: int, fps: int):
-        """
-        Crea un proceso FFmpeg para escribir video con máxima calidad.
-        
-        Args:
-            output_path: Ruta del archivo de salida
-            width: Ancho del video
-            height: Alto del video
-            fps: Frames por segundo
-        
-        Returns:
-            Proceso de FFmpeg o None si falla
-        """
         try:
-            # Comando FFmpeg con máxima calidad
             cmd = [
                 'ffmpeg',
-                '-y',  # Sobrescribir archivo si existe
+                '-y',
                 '-f', 'rawvideo',
                 '-vcodec', 'rawvideo',
                 '-s', f'{width}x{height}',
                 '-pix_fmt', 'bgr24',
                 '-r', str(fps),
-                '-i', '-',  # Entrada desde pipe
-                '-an',  # Sin audio
-                '-vcodec', 'libx264',  # Codec H.264
-                '-preset', 'medium',  # Balance calidad/velocidad
-                '-crf', '18',  # Calidad muy alta (0-51, menor=mejor, 18=visualmente sin pérdida)
-                '-b:v', self.video_bitrate,  # Bitrate explícito
-                '-pix_fmt', 'yuv420p',  # Compatibilidad
-                '-movflags', '+faststart',  # Streaming optimizado
+                '-i', '-',
+                '-an',
+                '-vcodec', 'libx264',
+                '-preset', 'medium',
+                '-crf', '18',
+                '-b:v', self.video_bitrate,
+                '-pix_fmt', 'yuv420p',
+                '-movflags', '+faststart',
                 output_path
             ]
             
@@ -164,18 +121,10 @@ class SessionManager:
             return None
 
     def start_session(self, width: int, height: int, fps: float | int) -> int:
-        """
-        Crea writers de vídeo (hasta 3 según configuración) y la fila de sesión en BD.
-        
-        NUEVO: Usa FFmpeg con CRF=18 y bitrate alto para máxima calidad.
-        
-        Returns:
-            session_id
-        """
         self.frame_size = (width, height)
         self.fps = int(round(fps)) if fps else 20
         self.start_time = time.time()
-        self.sequence_counter = 0  # Reset contador
+        self.sequence_counter = 0
 
         has_space, available_mb = check_disk_space(100)
         if not has_space:
@@ -186,14 +135,9 @@ class SessionManager:
         
         log.info(f"Iniciando sesión con resolución {width}x{height} @ {self.fps}fps")
         
-        # ============================================================
-        # CREAR WRITERS SEGÚN CONFIGURACIÓN (FFmpeg o OpenCV)
-        # ============================================================
-        
         if self.use_ffmpeg:
             log.info("Usando FFmpeg para máxima calidad (CRF=18, bitrate=%s)", self.video_bitrate)
             
-            # 1. RAW (sin procesar) con FFmpeg
             if self.generate_raw:
                 self.video_path_raw = os.path.join(
                     self.output_dir, f"{self.base_name}_raw_{width}x{height}_{self.fps}fps_{ts}.mp4"
@@ -202,7 +146,6 @@ class SessionManager:
                 if self.ffmpeg_raw:
                     log.info("FFmpeg RAW writer creado: %s", self.video_path_raw)
             
-            # 2. MEDIAPIPE con FFmpeg
             if self.generate_mediapipe:
                 self.video_path_mediapipe = os.path.join(
                     self.output_dir, f"{self.base_name}_mediapipe_{width}x{height}_{self.fps}fps_{ts}.mp4"
@@ -211,7 +154,6 @@ class SessionManager:
                 if self.ffmpeg_mediapipe:
                     log.info("FFmpeg MEDIAPIPE writer creado: %s", self.video_path_mediapipe)
             
-            # 3. LEGACY con FFmpeg
             if self.generate_legacy:
                 self.video_path_legacy = os.path.join(
                     self.output_dir, f"{self.base_name}_legacy_{width}x{height}_{self.fps}fps_{ts}.mp4"
@@ -221,21 +163,18 @@ class SessionManager:
                     log.info("FFmpeg LEGACY writer creado: %s", self.video_path_legacy)
         
         else:
-            # Fallback a OpenCV VideoWriter con mejor codec
             log.info("Usando OpenCV VideoWriter (calidad limitada)")
             
-            # Intentar varios codecs en orden de preferencia
             fourcc_options = [
-                ('H264', cv2.VideoWriter_fourcc(*'H264')),  # Mejor opción
-                ('X264', cv2.VideoWriter_fourcc(*'X264')),  # Segunda opción
-                ('avc1', cv2.VideoWriter_fourcc(*'avc1')),  # H.264 alternativo
-                ('mp4v', cv2.VideoWriter_fourcc(*'mp4v')),  # Fallback básico
+                ('H264', cv2.VideoWriter_fourcc(*'H264')),
+                ('X264', cv2.VideoWriter_fourcc(*'X264')),
+                ('avc1', cv2.VideoWriter_fourcc(*'avc1')),
+                ('mp4v', cv2.VideoWriter_fourcc(*'mp4v')),
             ]
             
             fourcc = None
             for codec_name, codec_fourcc in fourcc_options:
                 try:
-                    # Test con writer temporal
                     test_writer = cv2.VideoWriter(
                         'test.mp4', codec_fourcc, self.fps, self.frame_size
                     )
@@ -253,7 +192,6 @@ class SessionManager:
                 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
                 log.warning("Usando codec mp4v (baja calidad)")
             
-            # 1. RAW (sin procesar)
             if self.generate_raw:
                 self.video_path_raw = os.path.join(
                     self.output_dir, f"{self.base_name}_raw_{width}x{height}_{self.fps}fps_{ts}.mp4"
@@ -266,7 +204,6 @@ class SessionManager:
                 else:
                     log.info("OpenCV RAW writer creado: %s", self.video_path_raw)
             
-            # 2. MEDIAPIPE
             if self.generate_mediapipe:
                 self.video_path_mediapipe = os.path.join(
                     self.output_dir, f"{self.base_name}_mediapipe_{width}x{height}_{self.fps}fps_{ts}.mp4"
@@ -279,7 +216,6 @@ class SessionManager:
                 else:
                     log.info("OpenCV MEDIAPIPE writer creado: %s", self.video_path_mediapipe)
             
-            # 3. LEGACY
             if self.generate_legacy:
                 self.video_path_legacy = os.path.join(
                     self.output_dir, f"{self.base_name}_legacy_{width}x{height}_{self.fps}fps_{ts}.mp4"
@@ -292,9 +228,6 @@ class SessionManager:
                 else:
                     log.info("OpenCV LEGACY writer creado: %s", self.video_path_legacy)
 
-        # ============================================================
-        # CREAR FILA EN BD
-        # ============================================================
         log.info(
             "start_session: size=%s, fps=%s, patient=%s, exercise=%s",
             self.frame_size, self.fps, self.patient_id, self.exercise_id
@@ -312,19 +245,9 @@ class SessionManager:
         log.info("start_session OK: session_id=%s", self.session_id)
         return int(self.session_id)
 
-    # ============================================================
-    # REGISTRO POR FRAME
-    # ============================================================
-
     def should_record_frame(self) -> bool:
-        """
-        Determina si este frame debe guardarse en BD según sampling_rate.
-        
-        Returns:
-            True si debe guardarse, False si debe saltarse.
-        """
         if self.sampling_rate <= 0:
-            return True  # Todos los frames
+            return True
         
         elapsed = self.elapsed_time()
         if elapsed - self.last_sample_time >= self.sampling_rate:
@@ -333,19 +256,11 @@ class SessionManager:
         return False
 
     def record_frame_data(self, frame_index: int, elapsed_time: float, joints: dict) -> None:
-        """
-        Guarda datos biomecánicos del frame en movement_data y
-        acumula métricas (ángulos y simetrías) para agregación final.
-        
-        Solo guarda si should_record_frame() == True
-        """
         if self.session_id is None:
             log.error("record_frame_data llamado con session_id=None")
             raise RuntimeError("Session must be started before recording data.")
 
-        # Verificar sampling rate
         if not self.should_record_frame():
-            # Acumular métricas pero NO guardar en BD
             self._accumulate_metrics(joints)
             return
 
@@ -355,25 +270,16 @@ class SessionManager:
             **joints
         }
 
-        # Inserta movimiento
         try:
             crud.add_movement_data(self.session_id, data)
             self._frames_recorded_to_db += 1
         except Exception:
-            # En producción preferimos no interrumpir la sesión por un fallo puntual
             log.exception("add_movement_data FAILED")
 
-        # Acumula métricas
         self._accumulate_metrics(joints)
 
     def _accumulate_metrics(self, joints: dict) -> None:
-        """
-        Acumula valores de ángulos y simetrías para cálculo de min/max/range al cerrar sesión.
-        
-        Detecta tanto "angle" como "symmetry" en los nombres de métricas.
-        """
         for key, val in joints.items():
-            # Filtrar métricas relevantes: ángulos articulares y simetrías
             if ("angle" in key or "symmetry" in key) and val is not None:
                 try:
                     fval = float(val)
@@ -388,16 +294,6 @@ class SessionManager:
         frame_mediapipe=None, 
         frame_legacy=None
     ) -> None:
-        """
-        Escribe frames a los vídeos de salida (FFmpeg o OpenCV según configuración).
-        Incrementa el contador de secuencia.
-        
-        Args:
-            frame_raw: Frame sin procesar (original)
-            frame_mediapipe: Frame con overlay MediaPipe completo
-            frame_legacy: Frame con overlay clínico personalizado
-        """
-        # Escritura con FFmpeg (alta calidad)
         if self.use_ffmpeg:
             if self.ffmpeg_raw and frame_raw is not None:
                 try:
@@ -417,7 +313,6 @@ class SessionManager:
                 except Exception as e:
                     log.error(f"Error escribiendo frame LEGACY a FFmpeg: {e}")
         
-        # Escritura con OpenCV VideoWriter
         else:
             if self.video_writer_raw and frame_raw is not None:
                 self.video_writer_raw.write(frame_raw)
@@ -429,36 +324,18 @@ class SessionManager:
                 self.video_writer_legacy.write(frame_legacy)
         
         self._frames_written += 1
-        self.sequence_counter += 1  # Incrementar contador de secuencia
+        self.sequence_counter += 1
 
     def get_sequence_counter(self) -> int:
-        """
-        Retorna el número de secuencia actual (frames escritos).
-        
-        Returns:
-            Contador de secuencia (número del próximo frame a escribir)
-        """
         return self.sequence_counter
 
-    # ============================================================
-    # CIERRE DE SESIÓN
-    # ============================================================
-
     def close_session(self) -> None:
-        """
-        Libera recursos y calcula/guarda métricas agregadas (min/max/range).
-        
-        Diferencia unidades según tipo de métrica:
-        - "degrees" para ángulos articulares y simetrías angulares
-        - "pixels" para simetrías posicionales
-        """
         log.info(
             "close_session ENTER sid=%s, frames_written=%s, frames_in_db=%s, sampling_rate=%s, sequence=%s",
             self.session_id, self._frames_written, self._frames_recorded_to_db, 
             self.sampling_rate, self.sequence_counter
         )
 
-        # Cerrar FFmpeg processes
         if self.use_ffmpeg:
             if self.ffmpeg_raw:
                 try:
@@ -484,7 +361,6 @@ class SessionManager:
                 except Exception as e:
                     log.exception(f"Error cerrando FFmpeg LEGACY: {e}")
         
-        # Cerrar OpenCV VideoWriters
         else:
             if self.video_writer_raw:
                 try:
@@ -519,13 +395,11 @@ class SessionManager:
             )
             return
 
-        # Métricas clínicas agregadas
         saved = 0
         for metric_name, values in self.metric_records.items():
             if not values:
                 continue
 
-            # Sanea lista
             clean_vals: List[float] = []
             for v in values:
                 try:
@@ -542,11 +416,6 @@ class SessionManager:
             mn = min(clean_vals)
             rg = mx - mn
 
-            # ============================================================
-            # DETERMINAR UNIDAD SEGÚN TIPO DE MÉTRICA
-            # ============================================================
-            # Simetrías posicionales (verticales) usan "pixels"
-            # Ángulos y simetrías angulares usan "degrees"
             if "symmetry" in metric_name and "_y" in metric_name:
                 unit = "pixels"
             else:
@@ -567,21 +436,10 @@ class SessionManager:
             self.video_path_raw, self.video_path_mediapipe, self.video_path_legacy
         )
 
-    # ============================================================
-    # UTILIDADES
-    # ============================================================
-
     def elapsed_time(self) -> float:
-        """Segundos transcurridos desde el inicio de la sesión."""
         if self.start_time:
             return round(time.time() - self.start_time, 2)
         return 0.0
     
     def get_video_paths(self) -> Tuple[str | None, str | None, str | None]:
-        """
-        Retorna las rutas de los 3 vídeos generados.
-        
-        Returns:
-            Tupla (video_path_raw, video_path_mediapipe, video_path_legacy)
-        """
         return (self.video_path_raw, self.video_path_mediapipe, self.video_path_legacy)

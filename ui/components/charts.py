@@ -4,16 +4,9 @@ from db import crud
 
 
 def app():
-    """
-    Dashboard principal de inicio para Recon IA.
-    Muestra métricas globales y sesiones recientes.
-    """
-    st.title("🏠 Panel de inicio")
-    st.markdown("### Bienvenido al sistema de análisis biomecánico **Recon IA**")
+    st.title("Panel de inicio")
+    st.markdown("### Bienvenido al sistema de análisis biomecánico Recon IA")
 
-    # ============================================================
-    # MÉTRICAS GLOBALES
-    # ============================================================
     try:
         counts = crud.get_table_counts()
         col1, col2, col3, col4 = st.columns(4)
@@ -22,15 +15,12 @@ def app():
         col3.metric("Sesiones", counts.get("sessions", 0))
         col4.metric("Métricas", counts.get("metrics", 0))
     except Exception as e:
-        st.error(f"❌ Error al cargar métricas globales: {e}")
+        st.error(f"Error al cargar métricas globales: {e}")
         return
 
     st.divider()
 
-    # ============================================================
-    # SESIONES RECIENTES
-    # ============================================================
-    st.subheader("🕓 Sesiones recientes")
+    st.subheader("Sesiones recientes")
 
     try:
         conn = crud.get_connection()
@@ -52,16 +42,13 @@ def app():
         else:
             st.info("No hay sesiones registradas aún.")
     except Exception as e:
-        st.error(f"⚠️ Error al cargar sesiones recientes: {e}")
+        st.error(f"Error al cargar sesiones recientes: {e}")
 
     st.divider()
 
-    # ============================================================
-    # SECCIÓN DE AYUDA
-    # ============================================================
     st.markdown(
         """
-        ### ℹ️ Sugerencias de uso
+        ### Sugerencias de uso
         - **Pacientes:** Registre o seleccione un paciente antes de iniciar una sesión.
         - **Ejercicios:** Defina los movimientos o tests clínicos a analizar.
         - **Sesiones:** Capture o cargue vídeos y registre los resultados automáticamente.
@@ -69,4 +56,4 @@ def app():
         """
     )
 
-    st.success("✅ Sistema listo para usar. Seleccione una opción en la barra lateral para comenzar.")
+    st.success("Sistema listo para usar. Seleccione una opción en la barra lateral para comenzar.")
