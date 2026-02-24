@@ -1,10 +1,15 @@
 streamlit
+streamlit-webrtc
+av
 opencv-python-headless
 mediapipe
 numpy
 pandas
 matplotlib
 reportlab
-streamlit-webrtc
-av
+Pillow
 protobuf
+altair
+click
+tornado
+watchdog
