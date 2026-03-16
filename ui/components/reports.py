@@ -1,3 +1,4 @@
+import io
 import os
 import datetime
 from datetime import date
@@ -6,6 +7,24 @@ import pandas as pd
 
 from db import crud
 from reports.pdf_report import generate_session_report_pdf
+
+
+def _generate_session_csv(session_info: dict, metrics: list) -> bytes:
+    """Generate a CSV with session info header + all metric rows."""
+    output = io.StringIO()
+
+    output.write("# RECON IA - Informe de sesión\n")
+    output.write(f"# Sesión ID:,{session_info.get('id', '')}\n")
+    output.write(f"# Paciente:,{session_info.get('patient_name', '')}\n")
+    output.write(f"# Ejercicio:,{session_info.get('exercise_name', '')}\n")
+    output.write(f"# Fecha:,{session_info.get('datetime', '')}\n")
+    output.write(f"# Observaciones:,\"{session_info.get('notes', '') or ''}\"\n")
+    output.write("#\n")
+
+    df = pd.DataFrame(metrics, columns=["metrica", "valor", "unidad"])
+    df.to_csv(output, index=False)
+
+    return output.getvalue().encode("utf-8")
 
 
 def _resolve_video_path(relative_path):
@@ -143,8 +162,8 @@ def app():
                 st.caption(f"{os.path.basename(video_path)}")
 
             st.markdown("---")
-            col_actions = st.columns(3)
-            
+            col_actions = st.columns(4)
+
             with col_actions[0]:
                 if st.button("Ver métricas", key=f"metrics_{sid}"):
                     metrics = crud.get_metrics_by_session(sid)
@@ -154,7 +173,7 @@ def app():
                         st.markdown("**Métricas registradas:**")
                         for m in metrics:
                             st.write(f"- {m[0]}: {m[1]:.2f} {m[2] or ''}")
-            
+
             with col_actions[1]:
                 if st.button("Generar PDF", key=f"pdf_{sid}"):
                     try:
@@ -168,8 +187,23 @@ def app():
                         )
                     except Exception as e:
                         st.error(f"Error al generar PDF: {e}")
-            
+
             with col_actions[2]:
+                if st.button("Exportar CSV", key=f"csv_{sid}"):
+                    metrics_for_csv = crud.get_metrics_by_session(sid)
+                    if not metrics_for_csv:
+                        st.warning("No hay métricas para exportar en esta sesión.")
+                    else:
+                        csv_bytes = _generate_session_csv(s, metrics_for_csv)
+                        st.download_button(
+                            label="Descargar CSV",
+                            data=csv_bytes,
+                            file_name=f"metricas_sesion_{sid}.csv",
+                            mime="text/csv",
+                            key=f"dl_csv_{sid}",
+                        )
+
+            with col_actions[3]:
                 if st.button("Eliminar", key=f"delete_{sid}"):
                     st.session_state[f"delete_confirm_{sid}"] = True
                 
