@@ -49,6 +49,7 @@ def _draw_sequence_text(image_bgr, sequence: int) -> None:
 
 def _init_state():
     st.session_state.setdefault("record_mode", False)
+    st.session_state.setdefault("recording_active", False)
     st.session_state.setdefault("paused", False)
     st.session_state.setdefault("save_prompt", False)
     st.session_state.setdefault("source_mode", "Webcam (WebRTC)")
@@ -61,10 +62,17 @@ def _init_state():
     st.session_state.setdefault("generate_mediapipe", False)
     st.session_state.setdefault("generate_legacy", True)
 
-def _overlay_rec(image_bgr, paused=False, landmarks_found=False):
-    color = (0, 0, 255) if not paused else (0, 165, 255)
+def _overlay_rec(image_bgr, paused=False, landmarks_found=False, preview_only=False):
+    if preview_only:
+        color = (180, 180, 0)
+        label = "PREVIEW"
+    elif paused:
+        color = (0, 165, 255)
+        label = "PAUSA"
+    else:
+        color = (0, 0, 255)
+        label = "REC"
     cv2.circle(image_bgr, (30, 30), 10, color, -1)
-    label = "REC" if not paused else "PAUSA"
     cv2.putText(image_bgr, label, (50, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
     txt = "LMK: OK" if landmarks_found else "LMK: --"
     cv2.putText(image_bgr, txt, (30, 66), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
@@ -72,6 +80,7 @@ def _overlay_rec(image_bgr, paused=False, landmarks_found=False):
 
 def _reset_record_ui_state():
     st.session_state["record_mode"] = False
+    st.session_state["recording_active"] = False
     st.session_state["paused"] = False
     st.session_state["save_prompt"] = False
 
@@ -224,6 +233,11 @@ class Processor(VideoProcessorBase):
             
             img_bgr = frame.to_ndarray(format="bgr24")
             h, w = img_bgr.shape[:2]
+
+            if not self.session_mgr.recording_active:
+                display_frame = img_bgr.copy()
+                _overlay_rec(display_frame, preview_only=True)
+                return av.VideoFrame.from_ndarray(display_frame, format="bgr24")
 
             if st.session_state.get("paused", False):
                 display_frame = img_bgr.copy()
@@ -441,6 +455,7 @@ def app():
                 st.session_state["generate_mediapipe"] = generate_mediapipe
                 st.session_state["generate_legacy"] = generate_legacy
                 st.session_state["record_mode"] = True
+                st.session_state["recording_active"] = False
                 st.session_state["paused"] = False
                 st.session_state["save_prompt"] = False
                 st.rerun()
@@ -476,31 +491,40 @@ def app():
         """, unsafe_allow_html=True)
         
         st.markdown("### Controles de grabación")
-        
-        ctrl_cols = st.columns([2, 2, 1])
-        
-        with ctrl_cols[0]:
-            if st.session_state.get("paused", False):
-                if st.button("Reanudar grabación", type="primary", use_container_width=True):
-                    st.session_state["paused"] = False
-                    st.rerun()
-            else:
-                if st.button("Pausar grabación", use_container_width=True):
+
+        if not st.session_state.get("recording_active", False):
+            st.info("La cámara está lista. Pulse **Iniciar grabación** cuando quiera comenzar a registrar.")
+            if st.button("▶ Iniciar grabación", type="primary", use_container_width=True):
+                mgr = st.session_state.get("webrtc_session_mgr")
+                if mgr:
+                    mgr.reset_start_time()
+                st.session_state["recording_active"] = True
+                st.rerun()
+        else:
+            ctrl_cols = st.columns([2, 2, 1])
+
+            with ctrl_cols[0]:
+                if st.session_state.get("paused", False):
+                    if st.button("Reanudar grabación", type="primary", use_container_width=True):
+                        st.session_state["paused"] = False
+                        st.rerun()
+                else:
+                    if st.button("Pausar grabación", use_container_width=True):
+                        st.session_state["paused"] = True
+                        st.rerun()
+
+            with ctrl_cols[1]:
+                if st.button("Finalizar y guardar", type="secondary", use_container_width=True):
+                    st.session_state["save_prompt"] = True
                     st.session_state["paused"] = True
                     st.rerun()
-        
-        with ctrl_cols[1]:
-            if st.button("Finalizar y guardar", type="secondary", use_container_width=True):
-                st.session_state["save_prompt"] = True
-                st.session_state["paused"] = True
-                st.rerun()
-        
-        with ctrl_cols[2]:
-            if st.session_state.get("paused", False):
-                st.warning("PAUSADO")
-            else:
-                st.success("GRABANDO")
-        
+
+            with ctrl_cols[2]:
+                if st.session_state.get("paused", False):
+                    st.warning("PAUSADO")
+                else:
+                    st.success("GRABANDO")
+
         st.markdown("---")
 
         try:

@@ -66,7 +66,8 @@ class SessionManager:
         self._frames_recorded_to_db = 0
         
         self.sequence_counter = 0
-        
+        self.recording_active = False
+
         self.generate_raw = generate_raw
         self.generate_mediapipe = generate_mediapipe
         self.generate_legacy = generate_legacy
@@ -330,10 +331,11 @@ class SessionManager:
         return self.sequence_counter
 
     def close_session(self) -> None:
+        real_duration = self.elapsed_time()
         log.info(
-            "close_session ENTER sid=%s, frames_written=%s, frames_in_db=%s, sampling_rate=%s, sequence=%s",
-            self.session_id, self._frames_written, self._frames_recorded_to_db, 
-            self.sampling_rate, self.sequence_counter
+            "close_session ENTER sid=%s, frames_written=%s, frames_in_db=%s, sampling_rate=%s, sequence=%s, real_duration=%.2fs",
+            self.session_id, self._frames_written, self._frames_recorded_to_db,
+            self.sampling_rate, self.sequence_counter, real_duration
         )
 
         if self.use_ffmpeg:
@@ -382,6 +384,10 @@ class SessionManager:
                     log.info("VideoWriter LEGACY cerrado")
                 except Exception:
                     log.exception("close_session: video_writer_legacy.release() FAILED")
+
+        if self._frames_written > 0 and real_duration > 0 and self.use_ffmpeg:
+            for vpath in [self.video_path_raw, self.video_path_mediapipe, self.video_path_legacy]:
+                self._fix_video_duration(vpath, real_duration)
 
         if not self.session_id:
             log.warning("close_session: session_id is None (no se guardarán métricas).")
@@ -440,6 +446,66 @@ class SessionManager:
         if self.start_time:
             return round(time.time() - self.start_time, 2)
         return 0.0
-    
+
+    def reset_start_time(self) -> None:
+        """Reset the recording timer and activate recording. Call when actual recording begins."""
+        self.start_time = time.time()
+        self._frames_written = 0
+        self.recording_active = True
+        log.info("Recording timer reset and recording activated")
+
+    def _fix_video_duration(self, video_path: str, real_duration: float) -> None:
+        """Re-encode the video so its playback duration matches real_duration seconds."""
+        if not video_path or not os.path.exists(video_path):
+            return
+        if self._frames_written <= 0 or real_duration <= 0 or not self.fps:
+            return
+
+        expected_duration = self._frames_written / self.fps
+        if expected_duration <= 0:
+            return
+
+        ratio = real_duration / expected_duration
+        if abs(ratio - 1.0) < 0.03:
+            log.info(
+                "Video duration within 3%% tolerance (expected=%.1fs, real=%.1fs), skipping fix for %s",
+                expected_duration, real_duration, video_path
+            )
+            return
+
+        log.info(
+            "Fixing video duration: %.1fs → %.1fs (ratio=%.3f) for %s",
+            expected_duration, real_duration, ratio, video_path
+        )
+        temp_path = video_path + ".duration_fix.mp4"
+        try:
+            cmd = [
+                'ffmpeg', '-y',
+                '-i', video_path,
+                '-vf', f'setpts={ratio}*PTS',
+                '-c:v', 'libx264',
+                '-preset', 'fast',
+                '-crf', '18',
+                '-pix_fmt', 'yuv420p',
+                '-movflags', '+faststart',
+                '-an',
+                temp_path
+            ]
+            result = subprocess.run(cmd, capture_output=True, timeout=300)
+            if result.returncode == 0 and os.path.exists(temp_path):
+                os.replace(temp_path, video_path)
+                log.info("Video duration corrected: %s", video_path)
+            else:
+                err = result.stderr.decode('utf-8', errors='replace')[:300]
+                log.warning("FFmpeg duration fix failed (rc=%s): %s", result.returncode, err)
+        except Exception as e:
+            log.error("Error fixing video duration for %s: %s", video_path, e)
+        finally:
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except Exception:
+                    pass
+
     def get_video_paths(self) -> Tuple[str | None, str | None, str | None]:
         return (self.video_path_raw, self.video_path_mediapipe, self.video_path_legacy)
