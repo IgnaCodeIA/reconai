@@ -1,6 +1,7 @@
 import logging
-import os
 import sys
+
+from core.path_manager import get_log_path
 
 def get_logger(name: str = "reconia"):
     logger = logging.getLogger(name)
@@ -8,7 +9,6 @@ def get_logger(name: str = "reconia"):
         return logger
 
     logger.setLevel(logging.DEBUG)
-    os.makedirs("data/logs", exist_ok=True)
 
     fmt = logging.Formatter('%(asctime)s %(levelname)s [%(name)s] %(message)s')
 
@@ -16,11 +16,15 @@ def get_logger(name: str = "reconia"):
     ch.setLevel(logging.INFO)
     ch.setFormatter(fmt)
 
-    fh = logging.FileHandler("data/logs/reconia.log", encoding="utf-8")
-    fh.setLevel(logging.DEBUG)
-    fh.setFormatter(fmt)
+    try:
+        log_path = get_log_path()
+        fh = logging.FileHandler(str(log_path), encoding="utf-8")
+        fh.setLevel(logging.DEBUG)
+        fh.setFormatter(fmt)
+        logger.addHandler(fh)
+    except Exception:
+        pass  # si no se puede escribir el log en disco, al menos sigue funcionando con stdout
 
     logger.addHandler(ch)
-    logger.addHandler(fh)
     logger.propagate = False
     return logger

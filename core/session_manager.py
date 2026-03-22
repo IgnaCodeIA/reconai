@@ -173,18 +173,26 @@ class SessionManager:
                 ('mp4v', cv2.VideoWriter_fourcc(*'mp4v')),
             ]
             
+            import tempfile
             fourcc = None
             for codec_name, codec_fourcc in fourcc_options:
                 try:
+                    with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as tf:
+                        test_path = tf.name
                     test_writer = cv2.VideoWriter(
-                        'test.mp4', codec_fourcc, self.fps, self.frame_size
+                        test_path, codec_fourcc, self.fps, self.frame_size
                     )
                     if test_writer.isOpened():
                         fourcc = codec_fourcc
                         log.info(f"Usando codec: {codec_name}")
                         test_writer.release()
-                        if os.path.exists('test.mp4'):
-                            os.remove('test.mp4')
+                    else:
+                        test_writer.release()
+                    try:
+                        os.remove(test_path)
+                    except Exception:
+                        pass
+                    if fourcc is not None:
                         break
                 except Exception:
                     continue
@@ -342,24 +350,36 @@ class SessionManager:
             if self.ffmpeg_raw:
                 try:
                     self.ffmpeg_raw.stdin.close()
-                    self.ffmpeg_raw.wait(timeout=10)
+                    self.ffmpeg_raw.wait(timeout=60)
                     log.info("FFmpeg RAW cerrado")
+                except subprocess.TimeoutExpired:
+                    log.error("FFmpeg RAW no respondió en 60s, forzando cierre")
+                    self.ffmpeg_raw.kill()
+                    self.ffmpeg_raw.wait()
                 except Exception as e:
                     log.exception(f"Error cerrando FFmpeg RAW: {e}")
-            
+
             if self.ffmpeg_mediapipe:
                 try:
                     self.ffmpeg_mediapipe.stdin.close()
-                    self.ffmpeg_mediapipe.wait(timeout=10)
+                    self.ffmpeg_mediapipe.wait(timeout=60)
                     log.info("FFmpeg MEDIAPIPE cerrado")
+                except subprocess.TimeoutExpired:
+                    log.error("FFmpeg MEDIAPIPE no respondió en 60s, forzando cierre")
+                    self.ffmpeg_mediapipe.kill()
+                    self.ffmpeg_mediapipe.wait()
                 except Exception as e:
                     log.exception(f"Error cerrando FFmpeg MEDIAPIPE: {e}")
-            
+
             if self.ffmpeg_legacy:
                 try:
                     self.ffmpeg_legacy.stdin.close()
-                    self.ffmpeg_legacy.wait(timeout=10)
+                    self.ffmpeg_legacy.wait(timeout=60)
                     log.info("FFmpeg LEGACY cerrado")
+                except subprocess.TimeoutExpired:
+                    log.error("FFmpeg LEGACY no respondió en 60s, forzando cierre")
+                    self.ffmpeg_legacy.kill()
+                    self.ffmpeg_legacy.wait()
                 except Exception as e:
                     log.exception(f"Error cerrando FFmpeg LEGACY: {e}")
         
