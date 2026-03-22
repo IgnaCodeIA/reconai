@@ -83,6 +83,7 @@ def _reset_record_ui_state():
     st.session_state["recording_active"] = False
     st.session_state["paused"] = False
     st.session_state["save_prompt"] = False
+    st.session_state.pop("validation_result", None)
 
 def _safe_resolve_id(selected_name, options_dict):
     if not options_dict:
@@ -179,9 +180,10 @@ def _extract_joint_data(lm, w, h):
 
 def _preinitialize_session(patient_id, exercise_id, notes, sampling_rate,
                           generate_raw, generate_mediapipe, generate_legacy):
+    from core.path_manager import get_exports_dir
     try:
         session_mgr = SessionManager(
-            output_dir="data/exports",
+            output_dir=str(get_exports_dir()),
             base_name="captura_webcam",
             patient_id=patient_id,
             exercise_id=exercise_id,
@@ -565,8 +567,9 @@ def app():
             "audio": False
         }
 
+        webrtc_key = f"recon-ia-webrtc-{session_mgr.session_id}"
         ctx = webrtc_streamer(
-            key="recon-ia-webrtc",
+            key=webrtc_key,
             mode=WebRtcMode.SENDRECV,
             rtc_configuration=rtc_configuration,
             media_stream_constraints=media_stream_constraints,
