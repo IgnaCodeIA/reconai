@@ -237,8 +237,23 @@ class Processor(VideoProcessorBase):
             h, w = img_bgr.shape[:2]
 
             if not self.session_mgr.recording_active:
-                display_frame = img_bgr.copy()
-                _overlay_rec(display_frame, preview_only=True)
+                # Preview: mostrar overlay de pose sin grabar nada
+                image_bgr, results = self.detector.process_frame(img_bgr)
+                h, w = image_bgr.shape[:2]
+                display_frame = image_bgr.copy()
+                landmarks_found = bool(results and results.pose_landmarks)
+                if landmarks_found:
+                    lm = self.detector.extract_landmarks(results)
+                    joint_data, angles = _extract_joint_data(lm, w, h)
+                    if joint_data:
+                        display_frame = draw_legacy_overlay(
+                            display_frame, lm, w, h,
+                            angles=angles,
+                            a_max=60.0,
+                            sequence=0
+                        )
+                _overlay_rec(display_frame, preview_only=True,
+                             landmarks_found=landmarks_found)
                 return av.VideoFrame.from_ndarray(display_frame, format="bgr24")
 
             if st.session_state.get("paused", False):

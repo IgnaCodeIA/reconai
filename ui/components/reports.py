@@ -7,6 +7,7 @@ import pandas as pd
 
 from db import crud
 from reports.pdf_report import generate_session_report_pdf
+from core.path_manager import get_exports_dir
 
 
 def _generate_session_csv(session_info: dict, metrics: list) -> bytes:
@@ -30,19 +31,39 @@ def _generate_session_csv(session_info: dict, metrics: list) -> bytes:
 def _resolve_video_path(relative_path):
     if not relative_path:
         return None
-    
+
     if os.path.isabs(relative_path) and os.path.exists(relative_path):
         return relative_path
-    
-    cwd_path = os.path.join(os.getcwd(), relative_path)
-    if os.path.exists(cwd_path):
-        return cwd_path
-    
+
+    if not os.path.isabs(relative_path):
+        cwd_path = os.path.join(os.getcwd(), relative_path)
+        if os.path.exists(cwd_path):
+            return cwd_path
+
     root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     root_path = os.path.join(root_dir, relative_path)
     if os.path.exists(root_path):
         return root_path
-    
+
+    basename = os.path.basename(relative_path)
+    candidate_dirs = [
+        get_exports_dir(),
+        os.path.join(os.getcwd(), "data", "exports"),
+        os.path.join(os.getcwd(), "data", "exports", "videos"),
+        os.path.join(root_dir, "data", "exports"),
+        os.path.join(root_dir, "data", "exports", "videos"),
+    ]
+    for cdir in candidate_dirs:
+        if not os.path.isdir(cdir):
+            continue
+        for dirpath, _dirnames, filenames in os.walk(cdir):
+            depth = dirpath.replace(cdir, "").count(os.sep)
+            if depth >= 3:
+                _dirnames.clear()
+                continue
+            if basename in filenames:
+                return os.path.join(dirpath, basename)
+
     return None
 
 
