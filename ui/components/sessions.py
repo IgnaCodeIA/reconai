@@ -261,6 +261,13 @@ class Processor(VideoProcessorBase):
                 display_frame = _overlay_rec(display_frame, paused=True, landmarks_found=False)
                 return av.VideoFrame.from_ndarray(display_frame, format="bgr24")
 
+            h, w = img_bgr.shape[:2]
+            current_size = (w, h)
+            if not hasattr(self, '_last_frame_size') or self._last_frame_size != current_size:
+                self.session_mgr.reinit_video_writers(w, h)
+                self._last_frame_size = current_size
+                log.info("Writers reinicializados con dimensiones: %dx%d", w, h)
+
             sequence_num = self.session_mgr.get_sequence_counter()
             
             frame_raw = None

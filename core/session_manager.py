@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import math
 import cv2
@@ -67,6 +68,7 @@ class SessionManager:
         
         self.sequence_counter = 0
         self.recording_active = False
+        self._closing = False
 
         self.generate_raw = generate_raw
         self.generate_mediapipe = generate_mediapipe
@@ -83,10 +85,49 @@ class SessionManager:
             self.use_ffmpeg, self.video_bitrate
         )
 
+    def _get_ffmpeg_path(self) -> str:
+        """
+        Resuelve la ruta del ejecutable ffmpeg con el siguiente orden de prioridad:
+
+        Frozen (PyInstaller):
+          1. sys._MEIPASS/ffmpeg_bundle/ffmpeg.exe
+          2. <dir ejecutable>/ffmpeg_bundle/ffmpeg.exe
+          3. <dir ejecutable>/ffmpeg.exe
+        Desarrollo:
+          1. ffmpeg_bundle/ffmpeg.exe relativo al CWD
+          2. "ffmpeg" del PATH del sistema (fallback)
+        """
+        if getattr(sys, 'frozen', False):
+            candidates = [
+                os.path.join(sys._MEIPASS, 'ffmpeg_bundle', 'ffmpeg.exe'),
+                os.path.join(os.path.dirname(sys.executable), 'ffmpeg_bundle', 'ffmpeg.exe'),
+                os.path.join(os.path.dirname(sys.executable), 'ffmpeg.exe'),
+            ]
+            for path in candidates:
+                if os.path.exists(path):
+                    log.info("FFmpeg encontrado en: %s", path)
+                    return path
+            raise FileNotFoundError(
+                f"ffmpeg.exe no encontrado. Buscado en: {candidates}"
+            )
+        else:
+            dev_candidate = os.path.join(os.getcwd(), 'ffmpeg_bundle', 'ffmpeg.exe')
+            if os.path.exists(dev_candidate):
+                log.info("FFmpeg encontrado en: %s", dev_candidate)
+                return dev_candidate
+            log.warning("FFmpeg no encontrado localmente, usando 'ffmpeg' del PATH del sistema")
+            return 'ffmpeg'
+
     def _create_ffmpeg_writer(self, output_path: str, width: int, height: int, fps: int):
         try:
+            ffmpeg_bin = self._get_ffmpeg_path()
+        except FileNotFoundError as e:
+            log.error("FFmpeg no encontrado, no se puede crear writer: %s", e)
+            return None
+
+        try:
             cmd = [
-                'ffmpeg',
+                ffmpeg_bin,
                 '-y',
                 '-f', 'rawvideo',
                 '-vcodec', 'rawvideo',
@@ -108,7 +149,9 @@ class SessionManager:
                 cmd,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE
+                stderr=subprocess.DEVNULL,
+                close_fds=False,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
             )
             
             log.info(f"FFmpeg writer creado: {output_path} ({width}x{height} @ {fps}fps, bitrate={self.video_bitrate}, CRF=18)")
@@ -298,30 +341,52 @@ class SessionManager:
                     pass
 
     def write_video_frames(
-        self, 
-        frame_raw=None, 
-        frame_mediapipe=None, 
+        self,
+        frame_raw=None,
+        frame_mediapipe=None,
         frame_legacy=None
     ) -> None:
+        if self._closing:
+            log.debug(
+                "write_video_frames ignorado: sesión en proceso de cierre "
+                "(frame descartado, esto es normal)"
+            )
+            return
+
         if self.use_ffmpeg:
             if self.ffmpeg_raw and frame_raw is not None:
                 try:
-                    self.ffmpeg_raw.stdin.write(frame_raw.tobytes())
+                    if self.ffmpeg_raw and frame_raw is not None:
+                        h, w = frame_raw.shape[:2]
+                        log.info(f"FRAME SHAPE: {frame_raw.shape}, strides={frame_raw.strides}, size_bytes={frame_raw.nbytes}, expected={w*h*3}")
+                    h, w = frame_raw.shape[:2]
+                    self.ffmpeg_raw.stdin.write(np.ascontiguousarray(frame_raw[:h, :w]).tobytes())
                 except Exception as e:
                     log.error(f"Error escribiendo frame RAW a FFmpeg: {e}")
-            
+                    rc = self.ffmpeg_raw.poll()
+                    if rc is not None:
+                        log.error("FFmpeg RAW proceso ya muerto (rc=%s)", rc)
+
             if self.ffmpeg_mediapipe and frame_mediapipe is not None:
                 try:
-                    self.ffmpeg_mediapipe.stdin.write(frame_mediapipe.tobytes())
+                    h, w = frame_mediapipe.shape[:2]
+                    self.ffmpeg_mediapipe.stdin.write(np.ascontiguousarray(frame_mediapipe[:h, :w]).tobytes())
                 except Exception as e:
                     log.error(f"Error escribiendo frame MEDIAPIPE a FFmpeg: {e}")
-            
+                    rc = self.ffmpeg_mediapipe.poll()
+                    if rc is not None:
+                        log.error("FFmpeg MEDIAPIPE proceso ya muerto (rc=%s)", rc)
+
             if self.ffmpeg_legacy and frame_legacy is not None:
                 try:
-                    self.ffmpeg_legacy.stdin.write(frame_legacy.tobytes())
+                    h, w = frame_legacy.shape[:2]
+                    self.ffmpeg_legacy.stdin.write(np.ascontiguousarray(frame_legacy[:h, :w]).tobytes())
                 except Exception as e:
                     log.error(f"Error escribiendo frame LEGACY a FFmpeg: {e}")
-        
+                    rc = self.ffmpeg_legacy.poll()
+                    if rc is not None:
+                        log.error("FFmpeg LEGACY proceso ya muerto (rc=%s)", rc)
+
         else:
             if self.video_writer_raw and frame_raw is not None:
                 self.video_writer_raw.write(frame_raw)
@@ -339,6 +404,11 @@ class SessionManager:
         return self.sequence_counter
 
     def close_session(self) -> None:
+        self._closing = True
+        log.info(
+            "close_session: flag _closing activado — "
+            "write_video_frames bloqueará nuevas escrituras a FFmpeg"
+        )
         real_duration = self.elapsed_time()
         log.info(
             "close_session ENTER sid=%s, frames_written=%s, frames_in_db=%s, sampling_rate=%s, sequence=%s, real_duration=%.2fs",
@@ -347,41 +417,49 @@ class SessionManager:
         )
 
         if self.use_ffmpeg:
-            if self.ffmpeg_raw:
+            # FASE 1: cerrar todos los stdin primero, sin esperar
+            for proc, nombre in [
+                (self.ffmpeg_raw, "RAW"),
+                (self.ffmpeg_mediapipe, "MEDIAPIPE"),
+                (self.ffmpeg_legacy, "LEGACY"),
+            ]:
+                if proc is None:
+                    continue
                 try:
-                    self.ffmpeg_raw.stdin.close()
-                    self.ffmpeg_raw.wait(timeout=60)
-                    log.info("FFmpeg RAW cerrado")
-                except subprocess.TimeoutExpired:
-                    log.error("FFmpeg RAW no respondió en 60s, forzando cierre")
-                    self.ffmpeg_raw.kill()
-                    self.ffmpeg_raw.wait()
+                    if proc.stdin and not proc.stdin.closed:
+                        proc.stdin.close()
                 except Exception as e:
-                    log.exception(f"Error cerrando FFmpeg RAW: {e}")
+                    log.warning("Error cerrando stdin FFmpeg %s: %s", nombre, e)
+            log.info("Todos los stdin de FFmpeg cerrados, esperando finalización...")
 
-            if self.ffmpeg_mediapipe:
+            # FASE 2: esperar a que terminen todos
+            for proc, nombre, video_path in [
+                (self.ffmpeg_raw, "RAW", self.video_path_raw),
+                (self.ffmpeg_mediapipe, "MEDIAPIPE", self.video_path_mediapipe),
+                (self.ffmpeg_legacy, "LEGACY", self.video_path_legacy),
+            ]:
+                if proc is None:
+                    continue
                 try:
-                    self.ffmpeg_mediapipe.stdin.close()
-                    self.ffmpeg_mediapipe.wait(timeout=60)
-                    log.info("FFmpeg MEDIAPIPE cerrado")
+                    proc.wait(timeout=120)
+                    rc = proc.returncode
+                    if rc == 0:
+                        file_size = os.path.getsize(video_path) / 1024 if video_path and os.path.exists(video_path) else 0
+                        log.info("FFmpeg %s OK (rc=0) — archivo: %.1f KB → %s", nombre, file_size, video_path)
+                    else:
+                        log.error(
+                            "FFmpeg %s finalizó con error rc=%s",
+                            nombre, rc
+                        )
                 except subprocess.TimeoutExpired:
-                    log.error("FFmpeg MEDIAPIPE no respondió en 60s, forzando cierre")
-                    self.ffmpeg_mediapipe.kill()
-                    self.ffmpeg_mediapipe.wait()
-                except Exception as e:
-                    log.exception(f"Error cerrando FFmpeg MEDIAPIPE: {e}")
-
-            if self.ffmpeg_legacy:
-                try:
-                    self.ffmpeg_legacy.stdin.close()
-                    self.ffmpeg_legacy.wait(timeout=60)
-                    log.info("FFmpeg LEGACY cerrado")
-                except subprocess.TimeoutExpired:
-                    log.error("FFmpeg LEGACY no respondió en 60s, forzando cierre")
-                    self.ffmpeg_legacy.kill()
-                    self.ffmpeg_legacy.wait()
-                except Exception as e:
-                    log.exception(f"Error cerrando FFmpeg LEGACY: {e}")
+                    log.error(
+                        "FFmpeg %s no respondió en 120s - returncode desconocido, forzando kill",
+                        nombre
+                    )
+                    proc.kill()
+                    proc.wait()
+                except Exception:
+                    log.exception("Error esperando FFmpeg %s", nombre)
         
         else:
             if self.video_writer_raw:
@@ -497,10 +575,17 @@ class SessionManager:
             "Fixing video duration: %.1fs → %.1fs (ratio=%.3f) for %s",
             expected_duration, real_duration, ratio, video_path
         )
+
+        try:
+            ffmpeg_bin = self._get_ffmpeg_path()
+        except FileNotFoundError as e:
+            log.warning("FFmpeg no disponible para fix de duración: %s", e)
+            return
+
         temp_path = video_path + ".duration_fix.mp4"
         try:
             cmd = [
-                'ffmpeg', '-y',
+                ffmpeg_bin, '-y',
                 '-i', video_path,
                 '-vf', f'setpts={ratio}*PTS',
                 '-c:v', 'libx264',
@@ -526,6 +611,57 @@ class SessionManager:
                     os.remove(temp_path)
                 except Exception:
                     pass
+
+    def reinit_video_writers(self, width: int, height: int) -> None:
+        """Reinicializa los writers FFmpeg con las dimensiones reales del primer frame."""
+        if self.frame_size == (width, height):
+            return  # ya están bien configurados
+
+        log.info(
+            "reinit_video_writers: dimensiones reales %dx%d difieren de %s, "
+            "reinicializando writers FFmpeg",
+            width, height, self.frame_size
+        )
+
+        # Cerrar writers existentes
+        for proc, _ in [
+            (self.ffmpeg_raw, "RAW"),
+            (self.ffmpeg_mediapipe, "MEDIAPIPE"),
+            (self.ffmpeg_legacy, "LEGACY"),
+        ]:
+            if proc is None:
+                continue
+            try:
+                if proc.stdin and not proc.stdin.closed:
+                    proc.stdin.close()
+                proc.wait(timeout=5)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+
+        # Actualizar dimensiones
+        self.frame_size = (width, height)
+
+        # Recrear writers con dimensiones correctas
+        if self.generate_raw and self.video_path_raw:
+            self.ffmpeg_raw = self._create_ffmpeg_writer(
+                self.video_path_raw, width, height, self.fps
+            )
+            log.info("FFmpeg RAW reiniciado: %dx%d", width, height)
+
+        if self.generate_mediapipe and self.video_path_mediapipe:
+            self.ffmpeg_mediapipe = self._create_ffmpeg_writer(
+                self.video_path_mediapipe, width, height, self.fps
+            )
+            log.info("FFmpeg MEDIAPIPE reiniciado: %dx%d", width, height)
+
+        if self.generate_legacy and self.video_path_legacy:
+            self.ffmpeg_legacy = self._create_ffmpeg_writer(
+                self.video_path_legacy, width, height, self.fps
+            )
+            log.info("FFmpeg LEGACY reiniciado: %dx%d", width, height)
 
     def get_video_paths(self) -> Tuple[str | None, str | None, str | None]:
         return (self.video_path_raw, self.video_path_mediapipe, self.video_path_legacy)

@@ -1,6 +1,11 @@
 """
 Script para crear ejecutable de Windows de Recon IA usando PyInstaller.
-INCLUYE FFmpeg automáticamente + FIX para metadatos de Streamlit.
+INCLUYE:
+  - FFmpeg automáticamente
+  - FIX archivos estáticos de Streamlit (index.html, JS, CSS)
+  - FIX componentes frontend de streamlit-webrtc
+  - FIX modelos .binarypb de MediaPipe
+  - FIX metadatos de paquetes (PackageNotFoundError)
 
 Uso:
     python build_exe.py
@@ -22,15 +27,17 @@ import time
 
 APP_NAME = "ReconIA"
 MAIN_SCRIPT = "ui/app.py"
-ICON_PATH = "assets/icon.ico"  # Opcional: crear un icono
+ICON_PATH = "assets/icon.ico"
 
 # URL de FFmpeg para Windows (build estático)
-FFMPEG_DOWNLOAD_URL = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+FFMPEG_DOWNLOAD_URL = (
+    "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/"
+    "ffmpeg-master-latest-win64-gpl.zip"
+)
 FFMPEG_DIR = "ffmpeg_bundle"
 
-# Archivos y carpetas a incluir
+# Archivos y carpetas de la aplicación a incluir
 ADDITIONAL_DATA = [
-    ("db/models.py", "db"),
     ("data", "data"),
     ("core", "core"),
     ("db", "db"),
@@ -39,7 +46,7 @@ ADDITIONAL_DATA = [
 ]
 
 # ============================================================
-# HIDDEN IMPORTS (AMPLIADOS)
+# HIDDEN IMPORTS
 # ============================================================
 
 HIDDEN_IMPORTS = [
@@ -90,201 +97,284 @@ def check_dependencies():
     """Verifica que PyInstaller esté instalado."""
     try:
         import PyInstaller
-        print("✅ PyInstaller instalado")
+        print("OK PyInstaller instalado")
         return True
     except ImportError:
-        print("❌ PyInstaller no encontrado")
-        print("Instalando PyInstaller...")
+        print("PyInstaller no encontrado, instalando...")
         subprocess.check_call([sys.executable, "-m", "pip", "install", "pyinstaller"])
         return True
 
 
+def get_streamlit_data_paths():
+    """
+    CRITICO: Localiza los archivos estaticos y componentes de Streamlit.
+    Sin esto el ejecutable falla con:
+      FileNotFoundError: streamlit\\static\\index.html
+    Devuelve lista de tuplas (src, dst) para --add-data.
+    """
+    try:
+        import streamlit
+        streamlit_dir = Path(streamlit.__file__).parent
+    except ImportError:
+        print("ADVERTENCIA: No se puede importar streamlit para localizar assets")
+        return []
+
+    paths = []
+
+    # 1. Archivos estaticos del frontend (index.html, JS, CSS, media)
+    static_dir = streamlit_dir / "static"
+    if static_dir.exists():
+        paths.append((str(static_dir), "streamlit/static"))
+        print(f"  OK Streamlit static: {static_dir}")
+    else:
+        print(f"  ADVERTENCIA: No se encontro streamlit/static en {streamlit_dir}")
+
+    # 2. Componentes internos de Streamlit (algunos builds los necesitan)
+    components_dir = streamlit_dir / "components"
+    if components_dir.exists():
+        paths.append((str(components_dir), "streamlit/components"))
+        print(f"  OK Streamlit components: {components_dir}")
+
+    # 3. Directorio runtime completo (por si hay assets adicionales)
+    runtime_dir = streamlit_dir / "runtime"
+    if runtime_dir.exists():
+        paths.append((str(runtime_dir), "streamlit/runtime"))
+        print(f"  OK Streamlit runtime: {runtime_dir}")
+
+    return paths
+
+
+def get_streamlit_webrtc_data_paths():
+    """
+    Localiza los assets del frontend de streamlit-webrtc.
+    Sin esto el componente WebRTC no carga en el ejecutable.
+    Devuelve lista de tuplas (src, dst) para --add-data.
+    """
+    try:
+        import streamlit_webrtc
+        webrtc_dir = Path(streamlit_webrtc.__file__).parent
+    except ImportError:
+        print("  ADVERTENCIA: streamlit_webrtc no disponible")
+        return []
+
+    paths = []
+
+    # Buscar carpetas de frontend: frontend/, static/, component/
+    for subdir_name in ["frontend", "static", "component"]:
+        subdir = webrtc_dir / subdir_name
+        if subdir.exists():
+            paths.append((str(subdir), f"streamlit_webrtc/{subdir_name}"))
+            print(f"  OK streamlit_webrtc/{subdir_name}: {subdir}")
+
+    # Incluir el paquete completo como fallback
+    paths.append((str(webrtc_dir), "streamlit_webrtc"))
+    print(f"  OK streamlit_webrtc (paquete completo): {webrtc_dir}")
+
+    return paths
+
+
+def get_mediapipe_data_paths():
+    """
+    Localiza los modelos .binarypb y .tflite de MediaPipe.
+    Sin esto MediaPipe falla al inicializar en el ejecutable.
+    Devuelve lista de tuplas (src, dst) para --add-data.
+    """
+    try:
+        import mediapipe
+        mediapipe_dir = Path(mediapipe.__file__).parent
+    except ImportError:
+        print("  ADVERTENCIA: mediapipe no disponible")
+        return []
+
+    paths = []
+
+    # Modelos de pose y otros modelos necesarios
+    modules_dir = mediapipe_dir / "modules"
+    if modules_dir.exists():
+        paths.append((str(modules_dir), "mediapipe/modules"))
+        print(f"  OK MediaPipe modules: {modules_dir}")
+
+    # Python package completo (incluye .binarypb y datos)
+    for subdir_name in ["python", "tasks"]:
+        subdir = mediapipe_dir / subdir_name
+        if subdir.exists():
+            paths.append((str(subdir), f"mediapipe/{subdir_name}"))
+            print(f"  OK MediaPipe {subdir_name}: {subdir}")
+
+    return paths
+
+
 def get_package_metadata_paths():
     """
-    Obtiene las rutas de metadatos de paquetes críticos.
-    Esto resuelve el error: PackageNotFoundError: No package metadata was found for streamlit
+    Obtiene rutas de metadatos de paquetes criticos.
+    Resuelve: PackageNotFoundError: No package metadata was found for streamlit
     """
-    site_packages = site.getsitepackages()
-    if not site_packages:
-        # Fallback para entornos virtuales
-        site_packages = [site.getusersitepackages()]
-    
-    metadata_paths = []
+    site_packages = site.getsitepackages() or []
+    try:
+        site_packages.append(site.getusersitepackages())
+    except Exception:
+        pass
+
     critical_packages = [
-        "streamlit",
-        "altair",
-        "blinker",
-        "cachetools",
-        "click",
-        "gitpython",
-        "numpy",
-        "pandas",
-        "pillow",
-        "protobuf",
-        "pyarrow",
-        "pydeck",
-        "requests",
-        "rich",
-        "toml",
-        "tornado",
-        "tzlocal",
-        "validators",
-        "watchdog",
-        "packaging",
-        "importlib_metadata",
+        "streamlit", "altair", "blinker", "cachetools", "click",
+        "gitpython", "numpy", "pandas", "pillow", "protobuf",
+        "pyarrow", "pydeck", "requests", "rich", "toml", "tornado",
+        "tzlocal", "validators", "watchdog", "packaging",
+        "importlib_metadata", "streamlit_webrtc", "av", "mediapipe",
+        "opencv-python", "reportlab", "matplotlib",
     ]
-    
+
+    metadata_paths = []
     for sp in site_packages:
         if not os.path.exists(sp):
             continue
-        
         for pkg in critical_packages:
-            # Buscar .dist-info
-            for pattern in [f"{pkg}-*.dist-info", f"{pkg.replace('-', '_')}-*.dist-info"]:
-                matches = list(Path(sp).glob(pattern))
-                for match in matches:
+            for pattern in [
+                f"{pkg}-*.dist-info",
+                f"{pkg.replace('-', '_')}-*.dist-info",
+            ]:
+                for match in Path(sp).glob(pattern):
                     if match.is_dir():
-                        # PyInstaller espera formato (src, dst)
-                        # dst es la raíz donde se copiarán los metadatos
                         metadata_paths.append((str(match), str(match.name)))
-                        print(f"  📦 Metadatos encontrados: {match.name}")
-    
+                        print(f"  OK Metadatos: {match.name}")
+
     return metadata_paths
 
 
 def download_ffmpeg():
     """Descarga FFmpeg si no existe."""
-    
     if os.path.exists(FFMPEG_DIR):
-        print(f"✅ FFmpeg ya descargado en {FFMPEG_DIR}/")
-        return True
-    
-    print("\n📦 Descargando FFmpeg...")
+        ffmpeg_exe = os.path.join(FFMPEG_DIR, "ffmpeg.exe")
+        if os.path.exists(ffmpeg_exe):
+            print(f"OK FFmpeg ya disponible en {FFMPEG_DIR}/")
+            return True
+
+    print("\nDescargando FFmpeg para Windows...")
     print(f"URL: {FFMPEG_DOWNLOAD_URL}")
-    
-    zip_path = "ffmpeg.zip"
-    
+
+    zip_path = "ffmpeg_temp.zip"
+
     try:
-        # Descargar con barra de progreso
         def reporthook(blocknum, blocksize, totalsize):
             readsofar = blocknum * blocksize
             if totalsize > 0:
-                percent = readsofar * 100 / totalsize
-                s = f"\r{percent:5.1f}% {readsofar:,} / {totalsize:,} bytes"
-                sys.stderr.write(s)
+                percent = min(readsofar * 100 / totalsize, 100)
+                sys.stderr.write(f"\r  {percent:5.1f}% ({readsofar:,} / {totalsize:,} bytes)")
                 if readsofar >= totalsize:
                     sys.stderr.write("\n")
-            else:
-                sys.stderr.write(f"\rLeído {readsofar:,} bytes")
-        
+
         urllib.request.urlretrieve(FFMPEG_DOWNLOAD_URL, zip_path, reporthook)
-        
-        print("\n📂 Extrayendo FFmpeg...")
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            zip_ref.extractall("ffmpeg_temp")
-        
-        # Mover archivos a ubicación final
+
+        print("Extrayendo FFmpeg...")
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            zf.extractall("ffmpeg_extract_temp")
+
+        # Localizar carpeta bin dentro del zip extraido
         extracted_dir = None
-        for item in os.listdir("ffmpeg_temp"):
-            if item.startswith("ffmpeg"):
-                extracted_dir = os.path.join("ffmpeg_temp", item)
+        for item in os.listdir("ffmpeg_extract_temp"):
+            if item.lower().startswith("ffmpeg"):
+                extracted_dir = os.path.join("ffmpeg_extract_temp", item)
                 break
-        
+
         if not extracted_dir:
-            raise Exception("No se encontró directorio de FFmpeg en el zip")
-        
+            raise RuntimeError("No se encontro directorio ffmpeg en el zip")
+
         bin_dir = os.path.join(extracted_dir, "bin")
         if not os.path.exists(bin_dir):
-            raise Exception(f"No se encontró carpeta bin en {extracted_dir}")
-        
-        # Crear directorio de destino
+            raise RuntimeError(f"No se encontro carpeta bin en {extracted_dir}")
+
         os.makedirs(FFMPEG_DIR, exist_ok=True)
-        
-        # Copiar solo los ejecutables necesarios
         for exe in ["ffmpeg.exe", "ffprobe.exe"]:
             src = os.path.join(bin_dir, exe)
-            dst = os.path.join(FFMPEG_DIR, exe)
             if os.path.exists(src):
-                shutil.copy2(src, dst)
-                print(f"  ✅ Copiado: {exe}")
-        
-        # Limpiar
+                shutil.copy2(src, os.path.join(FFMPEG_DIR, exe))
+                print(f"  OK Copiado: {exe}")
+
         os.remove(zip_path)
-        shutil.rmtree("ffmpeg_temp")
-        
-        print(f"✅ FFmpeg instalado en {FFMPEG_DIR}/")
+        shutil.rmtree("ffmpeg_extract_temp")
+
+        print(f"OK FFmpeg instalado en {FFMPEG_DIR}/")
         return True
-        
+
     except Exception as e:
-        print(f"\n❌ Error descargando FFmpeg: {e}")
-        print("Puedes descargarlo manualmente de: https://ffmpeg.org/download.html")
+        print(f"\nError descargando FFmpeg: {e}")
+        print("Descarga manual: https://ffmpeg.org/download.html")
+        # Limpiar restos
+        for path in [zip_path, "ffmpeg_extract_temp"]:
+            if os.path.exists(path):
+                try:
+                    if os.path.isfile(path):
+                        os.remove(path)
+                    else:
+                        shutil.rmtree(path)
+                except Exception:
+                    pass
         return False
 
 
 def clean_build_dirs():
-    """Limpia directorios de build anteriores con manejo de errores."""
-    dirs_to_clean = ["build", "dist", "__pycache__"]
-    
-    for dir_name in dirs_to_clean:
+    """Limpia directorios de build anteriores."""
+    for dir_name in ["build", "dist", "__pycache__"]:
         if os.path.exists(dir_name):
-            print(f"🧹 Limpiando {dir_name}/")
-            max_retries = 3
-            for attempt in range(max_retries):
+            print(f"Limpiando {dir_name}/")
+            for attempt in range(3):
                 try:
                     shutil.rmtree(dir_name)
                     break
                 except PermissionError:
-                    if attempt < max_retries - 1:
-                        print(f"⚠️  {dir_name}/ en uso, esperando 2 segundos...")
-                        print(f"    (Cierra ReconIA.exe si está corriendo)")
+                    if attempt < 2:
+                        print(f"  {dir_name}/ en uso, esperando... (cierra ReconIA.exe si esta corriendo)")
                         time.sleep(2)
                     else:
-                        print(f"❌ No se pudo eliminar {dir_name}/")
-                        print(f"    SOLUCIÓN: Cierra manualmente ReconIA.exe y el explorador")
-                        print(f"    Luego presiona Enter para continuar...")
+                        print(f"No se pudo eliminar {dir_name}/ automaticamente.")
+                        print("Cierra ReconIA.exe manualmente y presiona Enter...")
                         input()
                         shutil.rmtree(dir_name)
-    
-    # Limpiar archivos .spec
+
     for spec_file in Path(".").glob("*.spec"):
-        print(f"🧹 Eliminando {spec_file}")
+        print(f"Eliminando {spec_file}")
         spec_file.unlink()
 
 
 def create_launcher_script():
-    """Crea script de lanzamiento para Streamlit con FFmpeg en PATH."""
-    launcher_content = """import sys
+    """
+    Crea el script de entrada para PyInstaller.
+    Configura PATH de FFmpeg, directorio de trabajo y lanza Streamlit.
+    """
+    launcher_content = '''import sys
 import os
 
-# CRÍTICO: Configurar metadatos ANTES de importar streamlit
-if getattr(sys, 'frozen', False):
-    # Ejecutando como ejecutable empaquetado
+if getattr(sys, "frozen", False):
+    # _MEIPASS: carpeta temporal donde PyInstaller extrae TODO el bundle
+    # Aqui viven ui/app.py, streamlit, mediapipe, ffmpeg_bundle, etc.
     application_path = sys._MEIPASS
-    
-    # Añadir ruta de metadatos al path de importlib
-    sys.path.insert(0, application_path)
-    
-    # Variable de entorno para importlib_metadata
-    os.environ['IMPORTLIB_METADATA_PATH'] = application_path
+    # exe_dir: carpeta donde esta el .exe fisicamente
+    # Aqui deben guardarse BD, videos grabados y exports (datos persistentes)
+    exe_dir = os.path.dirname(sys.executable)
 else:
-    # Ejecutando como script normal
     application_path = os.path.dirname(os.path.abspath(__file__))
+    exe_dir = application_path
 
-# IMPORTANTE: Añadir FFmpeg al PATH
-ffmpeg_path = os.path.join(application_path, 'ffmpeg_bundle')
-if os.path.exists(ffmpeg_path):
-    os.environ['PATH'] = ffmpeg_path + os.pathsep + os.environ.get('PATH', '')
-    print(f"✅ FFmpeg añadido al PATH: {ffmpeg_path}")
-else:
-    print(f"⚠️  FFmpeg no encontrado en: {ffmpeg_path}")
+# Exponer exe_dir para que init_db.py y session_manager.py
+# sepan donde guardar la BD y los videos (junto al .exe, no en _MEIPASS)
+os.environ["RECON_IA_DATA_DIR"] = exe_dir
 
+# CRITICO: chdir a _MEIPASS para que "ui/app.py" sea una ruta relativa valida.
+# Streamlit run acepta rutas relativas al CWD.
 os.chdir(application_path)
 
-# Ahora sí, importar streamlit
+# Anadir FFmpeg al PATH
+ffmpeg_path = os.path.join(application_path, "ffmpeg_bundle")
+if os.path.exists(ffmpeg_path):
+    os.environ["PATH"] = ffmpeg_path + os.pathsep + os.environ.get("PATH", "")
+
+if application_path not in sys.path:
+    sys.path.insert(0, application_path)
+
 import streamlit.web.cli as stcli
 
-if __name__ == '__main__':
-    # Lanzar Streamlit
+if __name__ == "__main__":
+    # Ruta relativa al CWD (= application_path = _MEIPASS): funciona correctamente
     sys.argv = [
         "streamlit",
         "run",
@@ -295,199 +385,196 @@ if __name__ == '__main__':
         "--server.fileWatcherType=none",
         "--global.developmentMode=false",
     ]
-    
     sys.exit(stcli.main())
-"""
-    
+'''
+
     with open("launcher.py", "w", encoding="utf-8") as f:
         f.write(launcher_content)
-    
-    print("✅ Launcher script creado (con fix de metadatos + developmentMode)")
+
+    print("OK Launcher script creado")
     return "launcher.py"
 
 
 def build_executable(launcher_script):
     """Construye el ejecutable con PyInstaller."""
-    
-    print("\n🔍 Buscando metadatos de paquetes...")
+
+    # ---- Recopilar todos los --add-data ----
+    print("\nLocalizando assets de Streamlit...")
+    streamlit_paths = get_streamlit_data_paths()
+
+    print("\nLocalizando assets de streamlit-webrtc...")
+    webrtc_paths = get_streamlit_webrtc_data_paths()
+
+    print("\nLocalizando modelos de MediaPipe...")
+    mediapipe_paths = get_mediapipe_data_paths()
+
+    print("\nLocalizando metadatos de paquetes...")
     metadata_paths = get_package_metadata_paths()
-    
-    if not metadata_paths:
-        print("⚠️  No se encontraron metadatos (puede causar problemas)")
-    
-    # Construir comando
+
+    if not streamlit_paths:
+        print("\nERROR: No se encontraron archivos estaticos de Streamlit.")
+        print("Asegurate de que streamlit esta instalado en este entorno Python.")
+        return False
+
+    # ---- Construir comando ----
     cmd = [
         "pyinstaller",
         "--name", APP_NAME,
         "--onefile",
-        "--console", 
+        "--console",
         "--clean",
         "--noconfirm",
     ]
-    
-    # Añadir icono si existe
+
     if os.path.exists(ICON_PATH):
         cmd.extend(["--icon", ICON_PATH])
-    
-    # Añadir hidden imports
+
     for imp in HIDDEN_IMPORTS:
         cmd.extend(["--hidden-import", imp])
-    
-    # Añadir datos adicionales
+
+    # Datos de la aplicacion
     for src, dst in ADDITIONAL_DATA:
         if os.path.exists(src):
             cmd.extend(["--add-data", f"{src}{os.pathsep}{dst}"])
-    
-    # CRÍTICO: Añadir metadatos de paquetes
+        else:
+            print(f"  ADVERTENCIA: No existe {src}, se omite")
+
+    # Assets criticos
+    for src, dst in streamlit_paths:
+        cmd.extend(["--add-data", f"{src}{os.pathsep}{dst}"])
+
+    for src, dst in webrtc_paths:
+        cmd.extend(["--add-data", f"{src}{os.pathsep}{dst}"])
+
+    for src, dst in mediapipe_paths:
+        cmd.extend(["--add-data", f"{src}{os.pathsep}{dst}"])
+
     for src, dst in metadata_paths:
         cmd.extend(["--add-data", f"{src}{os.pathsep}{dst}"])
-    
-    # CRÍTICO: Añadir FFmpeg
+
+    # FFmpeg
     if os.path.exists(FFMPEG_DIR):
         cmd.extend(["--add-data", f"{FFMPEG_DIR}{os.pathsep}ffmpeg_bundle"])
-        print(f"✅ FFmpeg incluido en el ejecutable")
-    
-    # Script principal
+        print(f"\nOK FFmpeg incluido desde {FFMPEG_DIR}/")
+    else:
+        print("\nADVERTENCIA: FFmpeg no encontrado, el video puede no funcionar")
+
     cmd.append(launcher_script)
-    
-    print("\n🔨 Construyendo ejecutable...")
-    print(f"Comando: {' '.join(cmd[:10])}... (truncado)")
-    print(f"Total de argumentos: {len(cmd)}")
-    
+
+    print(f"\nConstruyendo ejecutable ({len(cmd)} argumentos)...")
+
     try:
         subprocess.check_call(cmd)
-        print("\n✅ Ejecutable creado exitosamente!")
+        print("\nOK Ejecutable creado exitosamente!")
         return True
     except subprocess.CalledProcessError as e:
-        print(f"\n❌ Error al crear ejecutable: {e}")
+        print(f"\nError al crear ejecutable: {e}")
         return False
 
 
-def create_installer_script():
-    """Crea script .bat para lanzar el ejecutable."""
+def create_launcher_bat():
+    """Crea script .bat para lanzar el ejecutable sin consola visible."""
+    # Script .vbs para lanzar sin ventana de consola (solucion anterior ya aplicada)
+    vbs_content = f"""Set WshShell = CreateObject("WScript.Shell")
+WshShell.Run "{APP_NAME}.exe", 0, False
+WScript.Sleep 3000
+WshShell.Run "http://localhost:8501"
+"""
+    vbs_path = f"dist/{APP_NAME}_Launcher.vbs"
+    with open(vbs_path, "w", encoding="utf-8") as f:
+        f.write(vbs_content)
+    print(f"OK Launcher VBS creado: {vbs_path}")
+
+    # .bat como alternativa (muestra consola)
     bat_content = f"""@echo off
-echo ================================================
-echo        Iniciando Recon IA
-echo ================================================
-echo.
-echo Abriendo navegador en http://localhost:8501
-echo Presione Ctrl+C para cerrar la aplicacion
-echo.
-
+echo Iniciando Recon IA...
 start http://localhost:8501
-
 {APP_NAME}.exe
-
 pause
 """
-    
     bat_path = f"dist/{APP_NAME}_Launcher.bat"
     with open(bat_path, "w", encoding="utf-8") as f:
         f.write(bat_content)
-    
-    print(f"✅ Launcher batch creado: {bat_path}")
+    print(f"OK Launcher BAT creado: {bat_path}")
 
 
 def create_readme():
     """Crea README con instrucciones."""
-    readme_content = """
-RECON IA - INSTRUCCIONES DE USO
+    readme_content = """RECON IA - INSTRUCCIONES DE USO
 ================================
 
 CONTENIDO DEL PAQUETE:
-- ReconIA.exe          (Aplicación principal)
-- ReconIA_Launcher.bat (Lanzador recomendado)
-- data/                (Base de datos)
+  ReconIA.exe                Aplicacion principal
+  ReconIA_Launcher.vbs       Lanzador sin consola (recomendado)
+  ReconIA_Launcher.bat       Lanzador con consola (para diagnostico)
+  data/                      Base de datos y exportaciones
 
-INSTALACIÓN:
-1. Copia toda la carpeta a tu disco (ej: C:\\ReconIA)
-2. NO separes los archivos
+INSTALACION:
+  1. Copia toda la carpeta a tu disco (ej: C:\\ReconIA)
+  2. No separes los archivos del ejecutable
 
-USO:
-- Doble clic en "ReconIA_Launcher.bat"
-- O ejecuta directamente "ReconIA.exe"
-- Se abrirá el navegador automáticamente en http://localhost:8501
+USO NORMAL:
+  - Doble clic en ReconIA_Launcher.vbs
+  - Se abrira el navegador en http://localhost:8501 automaticamente
 
-PRIMERA EJECUCIÓN:
-- Puede tardar 10-30 segundos en cargar
-- Windows puede mostrar advertencia de seguridad (es normal)
-- Click en "Más información" → "Ejecutar de todas formas"
-
-PROBLEMAS COMUNES:
-- Si no se abre el navegador: abre manualmente http://localhost:8501
-- Si sale error de puerto ocupado: cierra otras instancias de la app
-- Si no carga el video: verifica permisos de cámara en Windows
+PRIMERA EJECUCION:
+  - Puede tardar 15-30 segundos en cargar
+  - Windows puede mostrar aviso de seguridad -> clic en "Ejecutar de todas formas"
+  - Si el navegador no abre: escribe manualmente http://localhost:8501
 
 REQUISITOS:
-- Windows 10/11 64-bit
-- Webcam (para captura en vivo)
-- 2GB RAM mínimo
-- Permisos de cámara habilitados
+  - Windows 10 / 11  (64-bit)
+  - Webcam (para captura en directo)
+  - Permisos de camara habilitados en el navegador
+  - 2 GB RAM minimo
 
-SOPORTE:
-- Email: [tu-email]
-- Logs: ver ventana de consola si ejecutas el .exe directamente
+PROBLEMAS COMUNES:
+  - Puerto ocupado: cierra otras instancias de la app
+  - Error de camara: verifica permisos en Configuracion de Windows
+  - Para diagnostico: usa ReconIA_Launcher.bat (muestra errores en consola)
 
-FFmpeg incluido: ✅
-Versión: [fecha de build]
+FFmpeg: incluido
 """
-    
-    readme_path = "dist/README.txt"
-    with open(readme_path, "w", encoding="utf-8") as f:
+    with open("dist/README.txt", "w", encoding="utf-8") as f:
         f.write(readme_content)
-    
-    print(f"✅ README creado: {readme_path}")
+    print("OK README creado: dist/README.txt")
 
 
 def main():
-    """Función principal."""
     print("=" * 60)
-    print("  RECON IA - BUILD EJECUTABLE WINDOWS CON FFMPEG")
-    print("  + FIX METADATOS STREAMLIT")
+    print("  RECON IA - BUILD EJECUTABLE WINDOWS")
+    print("  Fix: Streamlit static + WebRTC + MediaPipe + FFmpeg")
     print("=" * 60)
-    print()
-    
-    # 1. Verificar dependencias
-    if not check_dependencies():
-        return
-    
-    # 2. Descargar FFmpeg
-    if not download_ffmpeg():
-        print("\n⚠️  Continuando sin FFmpeg (puede haber problemas de video)")
-        input("Presiona Enter para continuar o Ctrl+C para cancelar...")
-    
-    # 3. Limpiar builds anteriores
-    clean_build_dirs()
-    
-    # 4. Crear launcher
-    launcher = create_launcher_script()
-    
-    # 5. Construir ejecutable
-    if not build_executable(launcher):
-        return
-    
-    # 6. Crear launcher batch y README
-    create_installer_script()
-    create_readme()
-    
-    # 7. Resumen
-    print("\n" + "=" * 60)
-    print("✅ BUILD COMPLETADO CON FFMPEG + FIX METADATOS")
-    print("=" * 60)
-    print(f"\n📦 Ejecutable: dist/{APP_NAME}.exe")
-    print(f"🚀 Launcher: dist/{APP_NAME}_Launcher.bat")
-    print(f"📄 README: dist/README.txt")
-    print(f"🎬 FFmpeg: Incluido en el ejecutable")
-    print(f"📋 Metadatos: Incluidos (fix para Streamlit)")
-    print("\nPara distribuir:")
-    print("  1. Copia la carpeta 'dist/' completa")
-    print("  2. Ejecuta el .bat o el .exe directamente")
-    print("\n⚠️  IMPORTANTE:")
-    print("  - Primera ejecución: 10-30 segundos")
-    print("  - FFmpeg está incluido y configurado")
-    print("  - Navegador se abre automáticamente")
     print()
 
-    
+    if not check_dependencies():
+        return
+
+    if not download_ffmpeg():
+        print("\nADVERTENCIA: Sin FFmpeg. Presiona Enter para continuar o Ctrl+C para cancelar.")
+        input()
+
+    clean_build_dirs()
+
+    launcher = create_launcher_script()
+
+    if not build_executable(launcher):
+        return
+
+    create_launcher_bat()
+    create_readme()
+
+    print()
+    print("=" * 60)
+    print("  BUILD COMPLETADO")
+    print("=" * 60)
+    print(f"  Ejecutable : dist/{APP_NAME}.exe")
+    print(f"  Launcher   : dist/{APP_NAME}_Launcher.vbs")
+    print(f"  README     : dist/README.txt")
+    print()
+    print("Para distribuir: copia la carpeta dist/ completa al cliente")
+    print()
+
+
 if __name__ == "__main__":
     main()
