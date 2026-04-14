@@ -54,6 +54,7 @@ def _resolve_video_path(relative_path):
         os.path.join(root_dir, "data", "exports", "videos"),
     ]
     for cdir in candidate_dirs:
+        cdir = str(cdir)
         if not os.path.isdir(cdir):
             continue
         for dirpath, _dirnames, filenames in os.walk(cdir):
