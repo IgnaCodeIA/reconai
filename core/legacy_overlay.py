@@ -1,5 +1,9 @@
 import cv2
 
+from core.logger import get_logger
+
+log = get_logger("core.legacy_overlay")
+
 C_LINE = (0, 255, 0)
 C_TORSO = (0, 255, 255)
 C_POINT = (0, 0, 255)
@@ -13,8 +17,9 @@ def _p(lm, name, w, h):
     return int(x * w), int(y * h)
 
 def draw_legacy_overlay(image_bgr, lm: dict, w: int, h: int, angles: dict,
-                        a_max: float = 60.0, sequence: int = None, 
+                        a_max: float = 60.0, sequence: int = None,
                         frame_idx: int = None, fps: int = None):
+    """Draw the clinical legacy overlay (color-coded limbs, torso, feet, angle labels) onto image_bgr."""
     need = [
         "RIGHT_HIP", "RIGHT_KNEE", "RIGHT_ANKLE",
         "LEFT_HIP", "LEFT_KNEE", "LEFT_ANKLE",
@@ -25,7 +30,7 @@ def draw_legacy_overlay(image_bgr, lm: dict, w: int, h: int, angles: dict,
     if any(k not in lm for k in need):
         if sequence is not None:
             cv2.rectangle(image_bgr, (15, 5), (250, 40), (250, 250, 250), -1)
-            cv2.putText(image_bgr, f'Secuencia: {sequence}', (20, 30), 
+            cv2.putText(image_bgr, f'Secuencia: {sequence}', (20, 30),
                        cv2.FONT_HERSHEY_SIMPLEX, 1, C_INFO, 1, cv2.LINE_AA)
         return image_bgr
 
@@ -120,22 +125,22 @@ def draw_legacy_overlay(image_bgr, lm: dict, w: int, h: int, angles: dict,
         _put(str(int(round(a_leg_l))), (KN_L[0], KN_L[1]), ok=False)
 
     cv2.rectangle(image_bgr, (15, 5), (250, 40), (250, 250, 250), -1)
-    
+
     if sequence is not None:
-        cv2.putText(image_bgr, f'Secuencia: {sequence}', (20, 30), 
+        cv2.putText(image_bgr, f'Secuencia: {sequence}', (20, 30),
                    cv2.FONT_HERSHEY_SIMPLEX, 1, C_INFO, 1, cv2.LINE_AA)
 
     if frame_idx is not None or fps is not None:
         cv2.rectangle(image_bgr, (15, 45), (280, 95), (250, 250, 250), -1)
-        
+
         y_pos = 70
         if frame_idx is not None:
-            cv2.putText(image_bgr, f'Frame: {frame_idx}', (20, y_pos), 
+            cv2.putText(image_bgr, f'Frame: {frame_idx}', (20, y_pos),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, C_INFO, 1, cv2.LINE_AA)
             y_pos += 20
-        
+
         if fps is not None:
-            cv2.putText(image_bgr, f'{w}x{h} @ {fps}fps', (20, y_pos), 
+            cv2.putText(image_bgr, f'{w}x{h} @ {fps}fps', (20, y_pos),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, C_INFO, 1, cv2.LINE_AA)
 
     return image_bgr

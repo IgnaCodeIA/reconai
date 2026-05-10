@@ -1,6 +1,9 @@
 import sqlite3
 from typing import List, Dict, Any, Tuple
 from db.init_db import get_connection
+from core.logger import get_logger
+
+log = get_logger("db.crud")
 
 
 def create_patient(
@@ -10,17 +13,22 @@ def create_patient(
     gender: str | None = None,
     notes: str | None = None
 ) -> int:
+    """Insert a new patient row and return its id. Raises ValueError on bad gender or duplicate DNI."""
+    log.debug(
+        "create_patient called with name=%s, dni=%s, age=%s, gender=%s",
+        name, dni, age, gender
+    )
     if gender and gender not in ("M", "F", "Other"):
-        raise ValueError(f"Género inválido: {gender}. Use 'M', 'F' o 'Other'")
-    
+        raise ValueError(f"Invalid gender: {gender}. Use 'M', 'F' or 'Other'")
+
     with get_connection() as conn:
         cur = conn.cursor()
-        
+
         if dni:
             cur.execute("SELECT id FROM patients WHERE dni = ?", (dni,))
             if cur.fetchone():
-                raise ValueError(f"Ya existe un paciente con DNI: {dni}")
-        
+                raise ValueError(f"A patient with DNI {dni} already exists")
+
         cur.execute(
             """
             INSERT INTO patients (name, dni, age, gender, notes)
@@ -33,6 +41,7 @@ def create_patient(
 
 
 def get_all_patients() -> List[Tuple]:
+    """Return every patient row, ordered by name."""
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -42,6 +51,8 @@ def get_all_patients() -> List[Tuple]:
 
 
 def get_patient_by_id(patient_id: int) -> Tuple | None:
+    """Return the patient row with the given id, or None if not found."""
+    log.debug("get_patient_by_id called with patient_id=%s", patient_id)
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -59,15 +70,20 @@ def update_patient(
     gender: str | None = None,
     notes: str | None = None
 ) -> bool:
+    """Update the provided fields for a patient. Returns True if a row was modified."""
+    log.debug(
+        "update_patient called with patient_id=%s, name=%s, dni=%s, age=%s, gender=%s",
+        patient_id, name, dni, age, gender
+    )
     if gender and gender not in ("M", "F", "Other"):
-        raise ValueError(f"Género inválido: {gender}")
-    
+        raise ValueError(f"Invalid gender: {gender}")
+
     with get_connection() as conn:
         cur = conn.cursor()
-        
+
         fields = []
         values = []
-        
+
         if name is not None:
             fields.append("name = ?")
             values.append(name)
@@ -83,38 +99,42 @@ def update_patient(
         if notes is not None:
             fields.append("notes = ?")
             values.append(notes)
-        
+
         if not fields:
             return False
-        
+
         values.append(patient_id)
         query = f"UPDATE patients SET {', '.join(fields)} WHERE id = ?"
-        
+
         cur.execute(query, values)
         conn.commit()
         return cur.rowcount > 0
 
 
 def delete_patient(patient_id: int, cascade: bool = True) -> bool:
+    """Delete a patient. If cascade is True, also delete the patient's sessions and related rows."""
+    log.debug("delete_patient called with patient_id=%s, cascade=%s", patient_id, cascade)
     with get_connection() as conn:
         cur = conn.cursor()
-        
+
         if cascade:
             cur.execute("SELECT id FROM sessions WHERE patient_id = ?", (patient_id,))
             session_ids = [row[0] for row in cur.fetchall()]
-            
+
             for sid in session_ids:
                 cur.execute("DELETE FROM movement_data WHERE session_id = ?", (sid,))
                 cur.execute("DELETE FROM metrics WHERE session_id = ?", (sid,))
-            
+
             cur.execute("DELETE FROM sessions WHERE patient_id = ?", (patient_id,))
-        
+
         cur.execute("DELETE FROM patients WHERE id = ?", (patient_id,))
         conn.commit()
         return cur.rowcount > 0
 
 
 def create_exercise(name: str, description: str | None = None) -> int:
+    """Insert a new exercise (or return the id of the existing one with the same name)."""
+    log.debug("create_exercise called with name=%s", name)
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -124,13 +144,14 @@ def create_exercise(name: str, description: str | None = None) -> int:
         if cur.lastrowid:
             conn.commit()
             return cur.lastrowid
-        
+
         cur.execute("SELECT id FROM exercises WHERE name = ?", (name,))
         row = cur.fetchone()
         return row[0] if row else 0
 
 
 def get_all_exercises() -> List[Tuple]:
+    """Return every exercise row, ordered by name."""
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute("SELECT id, name, description FROM exercises ORDER BY name")
@@ -138,44 +159,51 @@ def get_all_exercises() -> List[Tuple]:
 
 
 def update_exercise(exercise_id: int, name: str | None = None, description: str | None = None) -> bool:
+    """Update the provided fields for an exercise. Returns True if a row was modified."""
+    log.debug(
+        "update_exercise called with exercise_id=%s, name=%s",
+        exercise_id, name
+    )
     with get_connection() as conn:
         cur = conn.cursor()
-        
+
         fields = []
         values = []
-        
+
         if name is not None:
             fields.append("name = ?")
             values.append(name)
         if description is not None:
             fields.append("description = ?")
             values.append(description)
-        
+
         if not fields:
             return False
-        
+
         values.append(exercise_id)
         query = f"UPDATE exercises SET {', '.join(fields)} WHERE id = ?"
-        
+
         cur.execute(query, values)
         conn.commit()
         return cur.rowcount > 0
 
 
 def delete_exercise(exercise_id: int, cascade: bool = True) -> bool:
+    """Delete an exercise. If cascade is True, also delete sessions referencing it and their data."""
+    log.debug("delete_exercise called with exercise_id=%s, cascade=%s", exercise_id, cascade)
     with get_connection() as conn:
         cur = conn.cursor()
-        
+
         if cascade:
             cur.execute("SELECT id FROM sessions WHERE exercise_id = ?", (exercise_id,))
             session_ids = [row[0] for row in cur.fetchall()]
-            
+
             for sid in session_ids:
                 cur.execute("DELETE FROM movement_data WHERE session_id = ?", (sid,))
                 cur.execute("DELETE FROM metrics WHERE session_id = ?", (sid,))
-            
+
             cur.execute("DELETE FROM sessions WHERE exercise_id = ?", (exercise_id,))
-        
+
         cur.execute("DELETE FROM exercises WHERE id = ?", (exercise_id,))
         conn.commit()
         return cur.rowcount > 0
@@ -189,21 +217,26 @@ def create_session(
     video_path_legacy: str | None = None,
     notes: str | None = None
 ) -> int:
+    """Create a new session row linking a patient, exercise, and video output paths."""
+    log.debug(
+        "create_session called with patient_id=%s, exercise_id=%s, raw=%s, mp=%s, legacy=%s",
+        patient_id, exercise_id, video_path_raw, video_path_mediapipe, video_path_legacy
+    )
     with get_connection() as conn:
         cur = conn.cursor()
-        
+
         video_path = video_path_legacy or video_path_mediapipe or video_path_raw
-        
+
         cur.execute(
             """
             INSERT INTO sessions (
-                patient_id, exercise_id, 
+                patient_id, exercise_id,
                 video_path_raw, video_path_mediapipe, video_path_legacy,
                 video_path, notes
             )
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (patient_id, exercise_id, 
+            (patient_id, exercise_id,
              video_path_raw, video_path_mediapipe, video_path_legacy,
              video_path, notes)
         )
@@ -212,12 +245,13 @@ def create_session(
 
 
 def get_all_sessions() -> List[Dict[str, Any]]:
+    """Return every session, joined with patient and exercise names, newest first."""
     with get_connection() as conn:
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT 
+            SELECT
                 s.id,
                 s.timestamp AS datetime,
                 s.video_path,
@@ -237,12 +271,14 @@ def get_all_sessions() -> List[Dict[str, Any]]:
 
 
 def get_sessions_by_patient(patient_id: int) -> List[Dict[str, Any]]:
+    """Return all sessions for the given patient, newest first."""
+    log.debug("get_sessions_by_patient called with patient_id=%s", patient_id)
     with get_connection() as conn:
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT 
+            SELECT
                 s.id,
                 s.timestamp AS datetime,
                 s.video_path,
@@ -262,32 +298,35 @@ def get_sessions_by_patient(patient_id: int) -> List[Dict[str, Any]]:
 
 
 def delete_session(session_id: int) -> bool:
+    """Delete a session along with its movement_data and metrics rows."""
+    log.debug("delete_session called with session_id=%s", session_id)
     with get_connection() as conn:
         cur = conn.cursor()
-        
+
         cur.execute("DELETE FROM movement_data WHERE session_id = ?", (session_id,))
         cur.execute("DELETE FROM metrics WHERE session_id = ?", (session_id,))
         cur.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
-        
+
         conn.commit()
         return cur.rowcount > 0
 
 
 def add_movement_data(session_id: int, data: Dict[str, Any]) -> None:
+    """Insert one per-frame movement_data row built from the given dict."""
     if not data:
         return
-    
+
     data["session_id"] = session_id
-    
+
     columns = list(data.keys())
     placeholders = ["?" for _ in columns]
     values = [data[col] for col in columns]
-    
+
     query = f"""
         INSERT INTO movement_data ({', '.join(columns)})
         VALUES ({', '.join(placeholders)})
     """
-    
+
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(query, values)
@@ -295,6 +334,8 @@ def add_movement_data(session_id: int, data: Dict[str, Any]) -> None:
 
 
 def get_movement_data_by_session(session_id: int) -> List[Dict[str, Any]]:
+    """Return all movement_data rows for a session, ordered by frame index."""
+    log.debug("get_movement_data_by_session called with session_id=%s", session_id)
     with get_connection() as conn:
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
@@ -311,6 +352,11 @@ def add_metric(
     metric_value: float,
     unit: str | None = None
 ) -> None:
+    """Insert one metric row associated with a session."""
+    log.debug(
+        "add_metric called with session_id=%s, metric_name=%s, metric_value=%s, unit=%s",
+        session_id, metric_name, metric_value, unit
+    )
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -324,6 +370,8 @@ def add_metric(
 
 
 def get_metrics_by_session(session_id: int) -> List[Tuple[str, float, str]]:
+    """Return all metric rows for a session, ordered by metric_name."""
+    log.debug("get_metrics_by_session called with session_id=%s", session_id)
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -334,14 +382,15 @@ def get_metrics_by_session(session_id: int) -> List[Tuple[str, float, str]]:
 
 
 def get_table_counts() -> Dict[str, int]:
+    """Return a dict of {table_name: row_count} for the main DB tables."""
     with get_connection() as conn:
         cur = conn.cursor()
-        
+
         counts = {}
         for table in ["patients", "exercises", "sessions", "metrics"]:
             cur.execute(f"SELECT COUNT(*) FROM {table}")
             counts[table] = cur.fetchone()[0]
-        
+
         return counts
 
 

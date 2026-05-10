@@ -1,9 +1,13 @@
 import streamlit as st
 import pandas as pd
 from db import crud
+from core.logger import get_logger
+
+log = get_logger("ui.charts")
 
 
 def app():
+    """Render the home dashboard with global counts and a list of recent sessions."""
     st.title("Panel de inicio")
     st.markdown("### Bienvenido al sistema de análisis biomecánico Recon IA")
 
@@ -15,6 +19,7 @@ def app():
         col3.metric("Sesiones", counts.get("sessions", 0))
         col4.metric("Métricas", counts.get("metrics", 0))
     except Exception as e:
+        log.exception("Error loading global metrics")
         st.error(f"Error al cargar métricas globales: {e}")
         return
 
@@ -42,6 +47,7 @@ def app():
         else:
             st.info("No hay sesiones registradas aún.")
     except Exception as e:
+        log.exception("Error loading recent sessions")
         st.error(f"Error al cargar sesiones recientes: {e}")
 
     st.divider()

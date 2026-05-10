@@ -1,8 +1,12 @@
 import streamlit as st
 from db import crud
+from core.logger import get_logger
+
+log = get_logger("ui.exercises")
 
 
 def app():
+    """Render the exercises management page (create, edit, delete clinical exercises)."""
     st.title("Gestión de Ejercicios")
     st.write("Cree, edite o elimine ejercicios utilizados en las sesiones de análisis.")
 
@@ -11,9 +15,9 @@ def app():
 
     with st.form("add_exercise_form", clear_on_submit=True):
         st.subheader("Añadir nuevo ejercicio")
-        
+
         form_key = st.session_state.exercise_form_counter
-        
+
         name = st.text_input(
             "Nombre del ejercicio",
             key=f"exercise_name_{form_key}",
@@ -24,7 +28,7 @@ def app():
             key=f"exercise_desc_{form_key}",
             placeholder="Descripción del ejercicio, objetivos, consideraciones..."
         )
-        
+
         submitted = st.form_submit_button("Guardar ejercicio", type="primary")
 
         if submitted:
@@ -34,14 +38,15 @@ def app():
                 try:
                     crud.create_exercise(name.strip(), description.strip() or None)
                     st.success(f"Ejercicio '{name.strip()}' registrado correctamente.")
-                    
+
                     st.session_state.exercise_form_counter += 1
-                    
+
                     import time
                     time.sleep(0.5)
-                    
+
                     st.rerun()
                 except Exception as e:
+                    log.exception("Error creating exercise")
                     st.error(f"Error al registrar el ejercicio: {e}")
 
     st.divider()
@@ -51,6 +56,7 @@ def app():
     try:
         exercises = crud.get_all_exercises()
     except Exception as e:
+        log.exception("Error fetching exercises")
         st.error(f"Error al obtener ejercicios: {e}")
         return
 
@@ -123,6 +129,7 @@ def app():
                             st.session_state.pop("editing_exercise_id", None)
                             st.rerun()
                         except Exception as e:
+                            log.exception("Error updating exercise %s", exercise_id)
                             st.error(f"Error al actualizar el ejercicio: {e}")
 
                 elif cancel:
@@ -135,7 +142,7 @@ def app():
 
         if st.session_state.get("delete_candidate") == exercise_id:
             st.warning(f"¿Seguro que desea eliminar el ejercicio '{exercise_name}' y sus sesiones asociadas?")
-            
+
             c1, c2 = st.columns(2)
             confirm = c1.button("Confirmar eliminación", key=f"confirm_delete_{exercise_id}", type="primary")
             cancel = c2.button("Cancelar", key=f"cancel_delete_{exercise_id}")
@@ -150,6 +157,7 @@ def app():
                     st.session_state.pop("delete_candidate", None)
                     st.rerun()
                 except Exception as e:
+                    log.exception("Error deleting exercise %s", exercise_id)
                     st.error(f"Error al eliminar ejercicio: {e}")
 
             elif cancel:

@@ -1,5 +1,8 @@
 import numpy as np
 from core.utils import safe_round
+from core.logger import get_logger
+
+log = get_logger("core.angle_calculator")
 
 
 def calculate_angle(a, b, c):
@@ -46,5 +49,5 @@ def calculate_angle(a, b, c):
         return safe_round(abs(angle))
 
     except Exception as e:
-        print(f"[calculate_angle] Failed to compute angle: {e}")
+        log.exception("calculate_angle failed: %s", e)
         return None
