@@ -33,7 +33,7 @@ try:
     )
     _WEBRTC_OK = True
 except ImportError as e:
-    print(f"Error importando WebRTC: {e}")
+    log.error("Error importing WebRTC: %s", e)
     av = None
     _WEBRTC_OK = False
 
@@ -97,85 +97,85 @@ def _extract_joint_data(lm, w, h):
         shoulder_r = (lm["RIGHT_SHOULDER"][0] * w, lm["RIGHT_SHOULDER"][1] * h)
         elbow_r = (lm["RIGHT_ELBOW"][0] * w, lm["RIGHT_ELBOW"][1] * h)
         wrist_r = (lm["RIGHT_WRIST"][0] * w, lm["RIGHT_WRIST"][1] * h)
-        
+
         shoulder_l = (lm["LEFT_SHOULDER"][0] * w, lm["LEFT_SHOULDER"][1] * h)
         elbow_l = (lm["LEFT_ELBOW"][0] * w, lm["LEFT_ELBOW"][1] * h)
         wrist_l = (lm["LEFT_WRIST"][0] * w, lm["LEFT_WRIST"][1] * h)
-        
+
         hip_r = (lm["RIGHT_HIP"][0] * w, lm["RIGHT_HIP"][1] * h)
         knee_r = (lm["RIGHT_KNEE"][0] * w, lm["RIGHT_KNEE"][1] * h)
         ankle_r = (lm["RIGHT_ANKLE"][0] * w, lm["RIGHT_ANKLE"][1] * h)
-        
+
         hip_l = (lm["LEFT_HIP"][0] * w, lm["LEFT_HIP"][1] * h)
         knee_l = (lm["LEFT_KNEE"][0] * w, lm["LEFT_KNEE"][1] * h)
         ankle_l = (lm["LEFT_ANKLE"][0] * w, lm["LEFT_ANKLE"][1] * h)
-        
+
         heel_r = (lm["RIGHT_HEEL"][0] * w, lm["RIGHT_HEEL"][1] * h)
         foot_index_r = (lm["RIGHT_FOOT_INDEX"][0] * w, lm["RIGHT_FOOT_INDEX"][1] * h)
         heel_l = (lm["LEFT_HEEL"][0] * w, lm["LEFT_HEEL"][1] * h)
         foot_index_l = (lm["LEFT_FOOT_INDEX"][0] * w, lm["LEFT_FOOT_INDEX"][1] * h)
-        
+
         angle_arm_r = calculate_angle(shoulder_r, elbow_r, wrist_r)
         angle_arm_l = calculate_angle(shoulder_l, elbow_l, wrist_l)
         angle_leg_r = calculate_angle(hip_r, knee_r, ankle_r)
         angle_leg_l = calculate_angle(hip_l, knee_l, ankle_l)
-        
+
         angles = {
             "angle_arm_r": angle_arm_r,
             "angle_arm_l": angle_arm_l,
             "angle_leg_r": angle_leg_r,
             "angle_leg_l": angle_leg_l,
         }
-        
+
         symmetry_angle_arm = None
         if angle_arm_r is not None and angle_arm_l is not None:
             symmetry_angle_arm = abs(angle_arm_r - angle_arm_l)
-        
+
         symmetry_angle_leg = None
         if angle_leg_r is not None and angle_leg_l is not None:
             symmetry_angle_leg = abs(angle_leg_r - angle_leg_l)
-        
+
         symmetry_shoulder_y = abs(shoulder_r[1] - shoulder_l[1])
         symmetry_elbow_y = abs(elbow_r[1] - elbow_l[1])
         symmetry_knee_y = abs(knee_r[1] - knee_l[1])
-        
+
         joint_data = {
             "shoulder_x_r": shoulder_r[0], "shoulder_y_r": shoulder_r[1],
             "elbow_x_r": elbow_r[0], "elbow_y_r": elbow_r[1],
             "wrist_x_r": wrist_r[0], "wrist_y_r": wrist_r[1],
             "angle_arm_r": angle_arm_r,
-            
+
             "shoulder_x_l": shoulder_l[0], "shoulder_y_l": shoulder_l[1],
             "elbow_x_l": elbow_l[0], "elbow_y_l": elbow_l[1],
             "wrist_x_l": wrist_l[0], "wrist_y_l": wrist_l[1],
             "angle_arm_l": angle_arm_l,
-            
+
             "hip_x_r": hip_r[0], "hip_y_r": hip_r[1],
             "knee_x_r": knee_r[0], "knee_y_r": knee_r[1],
             "ankle_x_r": ankle_r[0], "ankle_y_r": ankle_r[1],
             "angle_leg_r": angle_leg_r,
-            
+
             "hip_x_l": hip_l[0], "hip_y_l": hip_l[1],
             "knee_x_l": knee_l[0], "knee_y_l": knee_l[1],
             "ankle_x_l": ankle_l[0], "ankle_y_l": ankle_l[1],
             "angle_leg_l": angle_leg_l,
-            
+
             "heel_x_r": heel_r[0], "heel_y_r": heel_r[1],
             "foot_index_x_r": foot_index_r[0], "foot_index_y_r": foot_index_r[1],
             "heel_x_l": heel_l[0], "heel_y_l": heel_l[1],
             "foot_index_x_l": foot_index_l[0], "foot_index_y_l": foot_index_l[1],
-            
+
             "symmetry_angle_arm": symmetry_angle_arm,
             "symmetry_angle_leg": symmetry_angle_leg,
             "symmetry_shoulder_y": symmetry_shoulder_y,
             "symmetry_elbow_y": symmetry_elbow_y,
             "symmetry_knee_y": symmetry_knee_y,
         }
-        
+
         return joint_data, angles
-        
+
     except KeyError as e:
-        print(f"Landmarks incompletos, falta: {e}")
+        log.debug("Incomplete landmarks, missing: %s", e)
         return None, {}
 
 def _preinitialize_session(patient_id, exercise_id, notes, sampling_rate,
@@ -193,24 +193,25 @@ def _preinitialize_session(patient_id, exercise_id, notes, sampling_rate,
             generate_mediapipe=generate_mediapipe,
             generate_legacy=generate_legacy,
         )
-        
+
         DEFAULT_WIDTH = 640
         DEFAULT_HEIGHT = 480
-        
-        log.info(f"Pre-inicializando sesión con {DEFAULT_WIDTH}x{DEFAULT_HEIGHT} @ {TARGET_FPS}fps")
-        
+
+        log.info("Pre-initializing session at %dx%d @ %dfps", DEFAULT_WIDTH, DEFAULT_HEIGHT, TARGET_FPS)
+
         session_id = session_mgr.start_session(DEFAULT_WIDTH, DEFAULT_HEIGHT, TARGET_FPS)
-        
-        log.info(f"Sesión pre-inicializada: ID={session_id}")
-        
+
+        log.info("Session pre-initialized: ID=%s", session_id)
+
         return session_mgr
-        
+
     except Exception as e:
-        log.error(f"Error en pre-inicialización: {e}")
+        log.error("Error during pre-initialization: %s", e)
         raise
 
 class Processor(VideoProcessorBase):
-    
+    """WebRTC video processor that runs pose detection per frame and forwards data to SessionManager."""
+
     def __init__(self, session_mgr: SessionManager):
         self.session_mgr = session_mgr
         self.detector = None
@@ -218,26 +219,25 @@ class Processor(VideoProcessorBase):
         self.started = True
         self.sid = self.session_mgr.session_id
         self.is_closed = False
-        log.info(f"Processor creado con sesión pre-inicializada ID={self.sid}")
+        log.info("Processor created with pre-initialized session ID=%s", self.sid)
 
     def recv(self, frame: "av.VideoFrame") -> "av.VideoFrame":
         try:
             if self.is_closed:
                 black_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-                cv2.putText(black_frame, "Sesion finalizada", (150, 240), 
+                cv2.putText(black_frame, "Sesion finalizada", (150, 240),
                            cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
                 return av.VideoFrame.from_ndarray(black_frame, format="bgr24")
-            
+
             if self.detector is None:
-                log.info("Inicializando PoseDetector en thread de WebRTC...")
+                log.info("Initializing PoseDetector inside the WebRTC thread...")
                 self.detector = PoseDetector()
-                log.info("PoseDetector inicializado correctamente")
-            
+                log.info("PoseDetector initialized successfully")
+
             img_bgr = frame.to_ndarray(format="bgr24")
             h, w = img_bgr.shape[:2]
 
             if not self.session_mgr.recording_active:
-                # Preview: mostrar overlay de pose sin grabar nada
                 image_bgr, results = self.detector.process_frame(img_bgr)
                 h, w = image_bgr.shape[:2]
                 display_frame = image_bgr.copy()
@@ -266,15 +266,15 @@ class Processor(VideoProcessorBase):
             if not hasattr(self, '_last_frame_size') or self._last_frame_size != current_size:
                 self.session_mgr.reinit_video_writers(w, h)
                 self._last_frame_size = current_size
-                log.info("Writers reinicializados con dimensiones: %dx%d", w, h)
+                log.info("Writers reinitialized at dimensions: %dx%d", w, h)
 
             sequence_num = self.session_mgr.get_sequence_counter()
-            
+
             frame_raw = None
             if self.session_mgr.generate_raw:
                 frame_raw = img_bgr.copy()
                 _draw_sequence_text(frame_raw, sequence_num)
-            
+
             image_bgr, results = self.detector.process_frame(img_bgr)
             landmarks_found = bool(results and results.pose_landmarks)
 
@@ -284,7 +284,7 @@ class Processor(VideoProcessorBase):
                 if landmarks_found:
                     frame_mediapipe = self.detector.draw_landmarks(frame_mediapipe, results)
                 _draw_sequence_text(frame_mediapipe, sequence_num)
-            
+
             frame_legacy = None
             joint_data = None
             if self.session_mgr.generate_legacy:
@@ -292,7 +292,7 @@ class Processor(VideoProcessorBase):
                 if landmarks_found:
                     lm = self.detector.extract_landmarks(results)
                     joint_data, angles = _extract_joint_data(lm, w, h)
-                    
+
                     if joint_data:
                         frame_legacy = draw_legacy_overlay(
                             frame_legacy, lm, w, h,
@@ -314,7 +314,7 @@ class Processor(VideoProcessorBase):
                     )
                 except Exception as e:
                     if self.frame_idx % 60 == 0:
-                        print(f"Error BD frame {self.frame_idx}: {e}")
+                        log.error("DB error at frame %s: %s", self.frame_idx, e)
 
             if self.session_mgr:
                 try:
@@ -326,36 +326,36 @@ class Processor(VideoProcessorBase):
                     self.frame_idx += 1
                 except Exception as e:
                     if self.frame_idx % 60 == 0:
-                        print(f"Error escritura frame {self.frame_idx}: {e}")
+                        log.error("Frame write error at %s: %s", self.frame_idx, e)
 
             display_frame = frame_legacy if frame_legacy is not None else \
                            frame_mediapipe if frame_mediapipe is not None else \
                            frame_raw if frame_raw is not None else image_bgr
-            
+
             display_frame = _overlay_rec(display_frame, paused=False, landmarks_found=landmarks_found)
-            
+
             return av.VideoFrame.from_ndarray(display_frame, format="bgr24")
-            
+
         except Exception as e:
             if not self.is_closed:
-                print(f"ERROR CRITICO en recv(): {e}")
-                import traceback
-                traceback.print_exc()
-            
+                log.exception("Critical error in recv(): %s", e)
+
             error_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-            cv2.putText(error_frame, "ERROR - Ver consola", (50, 240), 
+            cv2.putText(error_frame, "ERROR - Ver consola", (50, 240),
                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
             return av.VideoFrame.from_ndarray(error_frame, format="bgr24")
 
     def close_and_save(self):
+        """Close the underlying SessionManager, persisting the session and returning (id, paths)."""
         self.is_closed = True
         if self.session_mgr:
-            print(f"Cerrando sesión ID={self.session_mgr.session_id}...")
+            log.info("Closing session ID=%s...", self.session_mgr.session_id)
             self.session_mgr.close_session()
             return self.session_mgr.session_id, self.session_mgr.get_video_paths()
         return None, (None, None, None)
 
     def close_and_discard(self):
+        """Close the SessionManager, delete the DB row and the generated video files."""
         self.is_closed = True
         sid, paths = None, (None, None, None)
         if self.session_mgr:
@@ -364,30 +364,32 @@ class Processor(VideoProcessorBase):
             try:
                 self.session_mgr.close_session()
             except Exception:
-                pass
+                log.exception("Error closing session during discard")
             if sid:
                 try:
                     crud.delete_session(sid)
-                    print(f"Sesión {sid} descartada")
+                    log.info("Session %s discarded", sid)
                 except Exception:
-                    pass
+                    log.exception("Error deleting discarded session %s", sid)
             for path in paths:
                 if path and os.path.exists(path):
                     try:
                         os.remove(path)
                     except Exception:
-                        pass
+                        log.debug("Could not remove video file: %s", path)
         return sid, paths
 
     def release_models(self):
+        """Release pose detector resources and mark the processor as closed."""
         self.is_closed = True
         try:
             if self.detector:
                 self.detector.release()
         except Exception:
-            pass
+            log.exception("Error releasing PoseDetector")
 
 def app():
+    """Render the sessions page: start webcam recording or process an uploaded video."""
     _init_state()
 
     st.title("Gestión de Sesiones")
@@ -397,6 +399,7 @@ def app():
         patients = crud.get_all_patients()
         exercises = crud.get_all_exercises()
     except Exception as e:
+        log.exception("Error loading patients/exercises")
         st.error(f"Error al cargar datos: {e}")
         return
 
@@ -426,39 +429,39 @@ def app():
             )
 
         notes = st.text_area("Observaciones clínicas (opcional)")
-        
+
         st.write("**Versiones de vídeo a generar:**")
         col_vid = st.columns(3)
         with col_vid[0]:
             generate_raw = st.checkbox(
-                "Sin procesar (RAW)", 
+                "Sin procesar (RAW)",
                 value=False,
                 help="Vídeo original sin overlays"
             )
         with col_vid[1]:
             generate_mediapipe = st.checkbox(
-                "MediaPipe completo", 
+                "MediaPipe completo",
                 value=False,
                 help="Fondo blanco + esqueleto de pose (33 puntos)"
             )
         with col_vid[2]:
             generate_legacy = st.checkbox(
-                "Overlay clínico", 
+                "Overlay clínico",
                 value=True,
                 help="Barritas, puntos y ángulos (recomendado)"
             )
-        
+
         if st.checkbox("Generar todas las versiones", value=False):
             generate_raw = generate_mediapipe = generate_legacy = True
-        
+
         with st.expander("Configuración avanzada"):
-            use_sampling = st.checkbox("Reducir frecuencia de muestreo", 
+            use_sampling = st.checkbox("Reducir frecuencia de muestreo",
                                       help="Guarda menos frames en BD para ahorrar espacio")
             if use_sampling:
                 sampling_rate = st.slider("Segundos entre muestras", 0.1, 1.0, 0.2, 0.05)
             else:
                 sampling_rate = 0.0
-            
+
             st.info(f"Los videos se grabarán a {TARGET_FPS} fps para óptima calidad y velocidad correcta")
 
         if source_mode == "Webcam (WebRTC)" and not _WEBRTC_OK:
@@ -490,13 +493,13 @@ def app():
             return
 
         st.subheader("Grabación con webcam (en vivo)")
-        
+
         versions = []
         if st.session_state.get("generate_raw"): versions.append("RAW")
         if st.session_state.get("generate_mediapipe"): versions.append("MediaPipe (fondo blanco)")
         if st.session_state.get("generate_legacy"): versions.append("Clínico")
         st.info(f"Generando versiones: {', '.join(versions)} @ {TARGET_FPS}fps")
-        
+
         st.markdown("""
         <style>
         button[kind="header"] {
@@ -513,7 +516,7 @@ def app():
         }
         </style>
         """, unsafe_allow_html=True)
-        
+
         st.markdown("### Controles de grabación")
 
         if not st.session_state.get("recording_active", False):
@@ -565,7 +568,7 @@ def app():
         gen_raw = st.session_state.get("generate_raw", False)
         gen_mp = st.session_state.get("generate_mediapipe", False)
         gen_leg = st.session_state.get("generate_legacy", True)
-        
+
         if "webrtc_session_mgr" not in st.session_state:
             with st.spinner("Preparando sistema de grabación..."):
                 try:
@@ -577,9 +580,9 @@ def app():
                     time.sleep(0.5)
                 except Exception as e:
                     st.error(f"Error al preparar grabación: {e}")
-                    log.exception("Error en pre-inicialización")
+                    log.exception("Error during pre-initialization")
                     st.stop()
-        
+
         session_mgr = st.session_state["webrtc_session_mgr"]
 
         media_stream_constraints = {
@@ -603,18 +606,18 @@ def app():
         if st.session_state.get("save_prompt"):
             st.markdown("---")
             st.markdown("### Finalizar sesión")
-            
+
             st.info(f"""
             **Sesión actual:**
             - Paciente: {st.session_state.get('selected_patient', 'N/A')}
             - Ejercicio: {st.session_state.get('selected_exercise', 'N/A')}
             - Versiones generadas: {', '.join(versions)}
             """)
-            
+
             st.warning("¿Desea guardar esta sesión?")
-            
+
             bcols = st.columns([2, 2, 1])
-            
+
             with bcols[0]:
                 if st.button("Guardar sesión", type="primary", use_container_width=True):
                     with st.spinner("Guardando sesión..."):
@@ -624,21 +627,21 @@ def app():
                             try:
                                 ctx.stop()
                             except Exception:
-                                pass
+                                log.debug("ctx.stop() raised; ignoring")
                             if sid:
                                 st.success(f"Sesión guardada correctamente (ID {sid})")
                                 raw_path, mp_path, leg_path = paths
-                                if raw_path: 
+                                if raw_path:
                                     st.caption(f"RAW: {os.path.basename(raw_path)}")
-                                if mp_path: 
+                                if mp_path:
                                     st.caption(f"MediaPipe: {os.path.basename(mp_path)}")
-                                if leg_path: 
+                                if leg_path:
                                     st.caption(f"Clínico: {os.path.basename(leg_path)}")
                                 time.sleep(1.5)
-                        
+
                         if "webrtc_session_mgr" in st.session_state:
                             del st.session_state["webrtc_session_mgr"]
-                        
+
                         _reset_record_ui_state()
                         st.rerun()
 
@@ -651,13 +654,13 @@ def app():
                             try:
                                 ctx.stop()
                             except Exception:
-                                pass
+                                log.debug("ctx.stop() raised; ignoring")
                         st.info("Sesión descartada correctamente")
                         time.sleep(1)
-                    
+
                     if "webrtc_session_mgr" in st.session_state:
                         del st.session_state["webrtc_session_mgr"]
-                    
+
                     _reset_record_ui_state()
                     st.rerun()
 
@@ -671,17 +674,17 @@ def app():
         from core.file_validator import FileValidator
         from core.path_manager import get_temp_dir
         import uuid
-        
+
         st.subheader("Análisis desde archivo de vídeo")
-        
+
         versions = []
         if st.session_state.get("generate_raw"): versions.append("RAW")
         if st.session_state.get("generate_mediapipe"): versions.append("MediaPipe (fondo blanco)")
         if st.session_state.get("generate_legacy"): versions.append("Clínico")
         st.info(f"Versiones a generar: {', '.join(versions)}")
-        
+
         uploaded = st.file_uploader(
-            "Seleccione un archivo de video", 
+            "Seleccione un archivo de video",
             type=["mp4", "mov", "avi", "mpeg", "mpg", "m4v", "mkv"],
             help=f"Formatos soportados: MP4, MOV, AVI. Máximo {FileValidator.MAX_VIDEO_SIZE_MB}MB"
         )
@@ -692,7 +695,7 @@ def app():
             file_size_mb = uploaded.size / (1024 * 1024)
             st.write(f"**Archivo:** {uploaded.name}")
             st.write(f"**Tamaño:** {file_size_mb:.2f} MB")
-            
+
             if file_size_mb > FileValidator.MAX_VIDEO_SIZE_MB:
                 st.error(f"El archivo es demasiado grande ({file_size_mb:.1f}MB). Máximo permitido: {FileValidator.MAX_VIDEO_SIZE_MB}MB")
                 if st.button("Cancelar"):
@@ -701,43 +704,44 @@ def app():
             else:
                 if 'validation_result' not in st.session_state:
                     st.session_state.validation_result = None
-                
+
                 if st.session_state.validation_result is None:
                     if st.button("Validar archivo", type="primary"):
                         with st.spinner("Validando archivo..."):
                             temp_dir = get_temp_dir()
                             temp_filename = f"validate_{uuid.uuid4().hex[:8]}_{uploaded.name}"
                             temp_path = temp_dir / temp_filename
-                            
+
                             try:
                                 with open(temp_path, "wb") as f:
                                     f.write(uploaded.getvalue())
-                                
+
                                 is_valid, message, metadata = FileValidator.validate_video(temp_path)
-                                
+
                                 st.session_state.validation_result = {
                                     'valid': is_valid,
                                     'message': message,
                                     'metadata': metadata,
                                     'temp_path': str(temp_path)
                                 }
-                                
+
                             except Exception as e:
+                                log.exception("Error validating uploaded file")
                                 st.session_state.validation_result = {
                                     'valid': False,
                                     'message': f"Error al validar: {str(e)}",
                                     'metadata': {},
                                     'temp_path': str(temp_path)
                                 }
-                            
+
                             st.rerun()
-                
+
                 if st.session_state.validation_result is not None:
                     result = st.session_state.validation_result
-                    
+
                     if result['valid']:
                         st.success(f"Video válido: {result['message']}")
-                        
+
                         meta = result['metadata']
                         col1, col2, col3 = st.columns(3)
                         with col1:
@@ -746,27 +750,28 @@ def app():
                             st.metric("FPS", f"{meta.get('fps', 0):.1f}")
                         with col3:
                             st.metric("Duración", f"{meta.get('duration_sec', 0)}s")
-                        
+
                         st.caption(f"Frames: {meta.get('frame_count', 0)} | Codec: {meta.get('codec', 'unknown')}")
-                        
+
                         from core.path_manager import check_disk_space
                         estimated_size_mb = file_size_mb * 3
                         has_space, available_mb = check_disk_space(int(estimated_size_mb))
-                        
+
                         if not has_space:
                             st.error(f"Espacio insuficiente en disco. Necesario: ~{estimated_size_mb:.0f}MB, Disponible: {available_mb}MB")
                         else:
                             st.info(f"Espacio disponible: {available_mb}MB (necesario: ~{estimated_size_mb:.0f}MB)")
-                            
+
                             col_analyze, col_cancel = st.columns(2)
-                            
+
                             with col_analyze:
                                 if st.button("Analizar video", type="primary", use_container_width=True):
                                     temp_path = result['temp_path']
-                                    
+
                                     try:
                                         cap = VideoCaptureManager(temp_path)
                                     except Exception as e:
+                                        log.exception("Could not open uploaded video")
                                         st.error(f"No se pudo abrir el video: {e}")
                                         st.session_state.validation_result = None
                                         st.stop()
@@ -805,16 +810,16 @@ def app():
                                             break
 
                                         h, w = frame.shape[:2]
-                                        
+
                                         sequence_num = sess.get_sequence_counter()
-                                        
+
                                         frame_raw = None
                                         if gen_raw:
                                             frame_raw = frame.copy()
                                             _draw_sequence_text(frame_raw, sequence_num)
-                                        
+
                                         image_bgr, results = detector.process_frame(frame)
-                                        
+
                                         frame_mediapipe = None
                                         if gen_mp:
                                             if results and results.pose_landmarks:
@@ -824,14 +829,14 @@ def app():
                                             else:
                                                 frame_mediapipe = np.ones((h, w, 3), dtype=np.uint8) * 255
                                                 _draw_sequence_text(frame_mediapipe, sequence_num)
-                                        
+
                                         frame_legacy = None
                                         if gen_leg:
                                             frame_legacy = image_bgr.copy()
                                             if results and results.pose_landmarks:
                                                 lm = detector.extract_landmarks(results)
                                                 joint_data, angles = _extract_joint_data(lm, w, h)
-                                                
+
                                                 if joint_data:
                                                     frame_legacy = draw_legacy_overlay(
                                                         frame_legacy, lm, w, h,
@@ -839,7 +844,7 @@ def app():
                                                         a_max=60.0,
                                                         sequence=sequence_num
                                                     )
-                                                    
+
                                                     try:
                                                         sess.record_frame_data(
                                                             frame_index=idx,
@@ -847,7 +852,7 @@ def app():
                                                             joints=joint_data
                                                         )
                                                     except Exception as e:
-                                                        print(f"Error al registrar frame {idx}: {e}")
+                                                        log.error("Error recording frame %s: %s", idx, e)
                                                 else:
                                                     _draw_sequence_text(frame_legacy, sequence_num)
                                             else:
@@ -858,49 +863,49 @@ def app():
                                             frame_mediapipe=frame_mediapipe,
                                             frame_legacy=frame_legacy
                                         )
-                                        
+
                                         idx += 1
                                         prog.progress(min(idx / total_frames, 1.0))
 
                                     sess.close_session()
                                     cap.release()
                                     detector.release()
-                                    
+
                                     try:
                                         Path(temp_path).unlink()
                                     except:
-                                        pass
-                                    
+                                        log.debug("Could not unlink temp video file: %s", temp_path)
+
                                     raw_path, mp_path, leg_path = sess.get_video_paths()
                                     st.success(f"Sesión guardada (ID {sid})")
                                     if raw_path: st.info(f"RAW: {os.path.basename(raw_path)}")
                                     if mp_path: st.info(f"MediaPipe: {os.path.basename(mp_path)}")
                                     if leg_path: st.info(f"Clínico: {os.path.basename(leg_path)}")
-                                    
+
                                     st.session_state.validation_result = None
                                     _reset_record_ui_state()
                                     st.rerun()
-                            
+
                             with col_cancel:
                                 if st.button("Cancelar", use_container_width=True):
                                     try:
                                         Path(result['temp_path']).unlink()
                                     except:
-                                        pass
+                                        log.debug("Could not unlink temp validation file")
                                     st.session_state.validation_result = None
                                     _reset_record_ui_state()
                                     st.rerun()
                     else:
                         st.error(f"Video inválido: {result['message']}")
-                        
+
                         if result['metadata']:
                             with st.expander("Detalles técnicos"):
                                 st.json(result['metadata'])
-                        
+
                         if st.button("Intentar con otro archivo"):
                             try:
                                 Path(result['temp_path']).unlink()
                             except:
-                                pass
+                                log.debug("Could not unlink invalid temp file")
                             st.session_state.validation_result = None
                             st.rerun()

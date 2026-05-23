@@ -3,6 +3,9 @@ from pathlib import Path
 
 from core.path_manager import get_db_path, get_database_dir
 from db import models
+from core.logger import get_logger
+
+log = get_logger("db.init_db")
 
 DB_PATH = get_db_path()
 
@@ -23,6 +26,7 @@ REQUIRED_TABLE_NAMES = [
 
 
 def get_connection():
+    """Open a SQLite connection to the application database with WAL and foreign keys enabled."""
     db_dir = get_database_dir()
     db_dir.mkdir(parents=True, exist_ok=True)
 
@@ -35,23 +39,25 @@ def get_connection():
 
 
 def init_database():
+    """Create all tables defined in db.models, raising on SQLite errors."""
     conn = get_connection()
     try:
         cursor = conn.cursor()
         for table_sql in models.TABLES:
             cursor.execute(table_sql)
         conn.commit()
-        print(f"[init_db] Database successfully initialized at: {DB_PATH}")
+        log.info("Database successfully initialized at: %s", DB_PATH)
     except sqlite3.Error as e:
-        print(f"[init_db] SQLite error during initialization: {e}")
+        log.error("SQLite error during initialization: %s", e)
         raise
     finally:
         conn.close()
 
 
 def ensure_database_exists():
+    """Create the database and any missing tables; no-op if everything already exists."""
     if not DB_PATH.exists():
-        print(f"[init_db] Database file not found. Creating at: {DB_PATH}")
+        log.info("Database file not found. Creating at: %s", DB_PATH)
         init_database()
         return
 
@@ -67,8 +73,8 @@ def ensure_database_exists():
     missing = [t for t in REQUIRED_TABLE_NAMES if t not in existing_table_names]
 
     if missing:
-        print(f"[init_db] Missing tables detected: {missing}")
-        print("[init_db] Creating missing tables...")
+        log.info("Missing tables detected: %s", missing)
+        log.info("Creating missing tables...")
         init_database()
     else:
-        print(f"[init_db] Database OK at: {DB_PATH}")
+        log.debug("Database OK at: %s", DB_PATH)

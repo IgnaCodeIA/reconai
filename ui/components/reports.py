@@ -8,6 +8,9 @@ import pandas as pd
 from db import crud
 from reports.pdf_report import generate_session_report_pdf
 from core.path_manager import get_exports_dir
+from core.logger import get_logger
+
+log = get_logger("ui.reports")
 
 
 def _generate_session_csv(session_info: dict, metrics: list) -> bytes:
@@ -70,13 +73,13 @@ def _resolve_video_path(relative_path):
 
 def _filter_sessions(sessions, selected_patient, selected_exercise, date_range):
     filtered = list(sessions)
-    
+
     if selected_patient not in ("Todos", "No hay pacientes"):
         filtered = [s for s in filtered if s.get("patient_name") == selected_patient]
-    
+
     if selected_exercise not in ("Todos", "No hay ejercicios"):
         filtered = [s for s in filtered if s.get("exercise_name") == selected_exercise]
-    
+
     start_date = end_date = None
     if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
         d0, d1 = date_range
@@ -84,28 +87,30 @@ def _filter_sessions(sessions, selected_patient, selected_exercise, date_range):
         d1 = d1.date() if hasattr(d1, "date") else d1
         if isinstance(d0, date) and isinstance(d1, date):
             start_date, end_date = d0, d1
-    
+
     if start_date and end_date:
         def _in_range(dt_str):
             dt = pd.to_datetime(dt_str, errors="coerce")
             return pd.notna(dt) and start_date <= dt.date() <= end_date
-        
+
         filtered = [s for s in filtered if s.get("datetime") and _in_range(s["datetime"])]
-    
+
     return filtered
 
 
 def app():
+    """Render the history & metrics page (browse sessions, view videos, export PDF/CSV)."""
     st.title("Historial y Métricas")
     st.write("Consulte el histórico de sesiones, visualice vídeos y genere informes PDF.")
 
     st.subheader("Filtros")
-    
+
     try:
         patients = crud.get_all_patients()
         exercises = crud.get_all_exercises()
         sessions = crud.get_all_sessions()
     except Exception as e:
+        log.exception("Error loading data for reports")
         st.error(f"Error al cargar datos: {e}")
         return
 
@@ -141,7 +146,7 @@ def app():
         patient_name = s.get("patient_name")
         exercise_name = s.get("exercise_name")
         notes = s.get("notes")
-        
+
         video_path_raw = s.get("video_path_raw")
         video_path_mediapipe = s.get("video_path_mediapipe")
         video_path_legacy = s.get("video_path_legacy")
@@ -154,21 +159,21 @@ def app():
 
             st.markdown("---")
             st.markdown("### Visualización de vídeo")
-            
+
             available_videos = {}
-            
+
             raw_resolved = _resolve_video_path(video_path_raw)
             if raw_resolved:
                 available_videos["Sin procesar (RAW)"] = raw_resolved
-            
+
             mp_resolved = _resolve_video_path(video_path_mediapipe)
             if mp_resolved:
                 available_videos["MediaPipe completo"] = mp_resolved
-            
+
             leg_resolved = _resolve_video_path(video_path_legacy)
             if leg_resolved:
                 available_videos["Overlay clínico"] = leg_resolved
-            
+
             if not available_videos:
                 st.warning("No hay vídeos disponibles para esta sesión")
             else:
@@ -178,7 +183,7 @@ def app():
                     key=f"video_selector_{sid}",
                     horizontal=True
                 )
-                
+
                 video_path = available_videos[selected_version]
                 st.video(video_path)
                 st.caption(f"{os.path.basename(video_path)}")
@@ -208,6 +213,7 @@ def app():
                             key=f"dl_pdf_{sid}",
                         )
                     except Exception as e:
+                        log.exception("Error generating PDF for session %s", sid)
                         st.error(f"Error al generar PDF: {e}")
 
             with col_actions[2]:
@@ -228,7 +234,7 @@ def app():
             with col_actions[3]:
                 if st.button("Eliminar", key=f"delete_{sid}"):
                     st.session_state[f"delete_confirm_{sid}"] = True
-                
+
                 if st.session_state.get(f"delete_confirm_{sid}", False):
                     st.warning(f"¿Confirmar eliminación de sesión {sid}?")
                     cc = st.columns(2)
@@ -241,7 +247,7 @@ def app():
                                     try:
                                         os.remove(resolved)
                                     except Exception:
-                                        pass
+                                        log.debug("Could not remove video file: %s", resolved)
                             st.success(f"Sesión {sid} eliminada")
                             st.session_state.pop(f"delete_confirm_{sid}", None)
                             st.rerun()

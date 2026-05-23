@@ -1,8 +1,12 @@
 import streamlit as st
 from db import crud
+from core.logger import get_logger
+
+log = get_logger("ui.patients")
 
 
 def app():
+    """Render the patients management page (create, edit, delete patient records)."""
     st.title("Gestión de Pacientes")
     st.write("Agregue, edite o elimine registros de pacientes de la clínica.")
 
@@ -11,29 +15,29 @@ def app():
 
     with st.form("add_patient_form", clear_on_submit=True):
         st.subheader("Añadir nuevo paciente")
-        
+
         form_key = st.session_state.patient_form_counter
-        
+
         name = st.text_input(
-            "Nombre completo", 
+            "Nombre completo",
             key=f"patient_name_{form_key}",
             placeholder="Ej: Juan Pérez García"
         )
         dni = st.text_input(
-            "DNI", 
+            "DNI",
             key=f"patient_dni_{form_key}",
             placeholder="Ej: 12345678A"
         )
         age = st.number_input(
-            "Edad", 
-            min_value=0, 
-            max_value=120, 
-            step=1, 
+            "Edad",
+            min_value=0,
+            max_value=120,
+            step=1,
             value=0,
             key=f"patient_age_{form_key}"
         )
         gender = st.selectbox(
-            "Género", 
+            "Género",
             ["M", "F", "Other"],
             key=f"patient_gender_{form_key}"
         )
@@ -52,14 +56,15 @@ def app():
                 try:
                     crud.create_patient(name, dni, age, gender, notes)
                     st.success(f"Paciente '{name}' registrado correctamente.")
-                    
+
                     st.session_state.patient_form_counter += 1
-                    
+
                     import time
                     time.sleep(0.5)
-                    
+
                     st.rerun()
                 except Exception as e:
+                    log.exception("Error creating patient")
                     st.error(f"Error al registrar el paciente: {e}")
 
     st.divider()
@@ -69,6 +74,7 @@ def app():
     try:
         patients = crud.get_all_patients()
     except Exception as e:
+        log.exception("Error fetching patients")
         st.error(f"Error al obtener pacientes: {e}")
         return
 
@@ -125,6 +131,7 @@ def app():
                             st.session_state.pop("editing_patient_id", None)
                             st.rerun()
                         except Exception as e:
+                            log.exception("Error updating patient %s", patient_id)
                             st.error(f"Error al actualizar paciente: {e}")
 
                 elif cancel:
@@ -137,7 +144,7 @@ def app():
 
         if st.session_state.get("delete_candidate") == patient_id:
             st.warning(f"¿Seguro que desea eliminar al paciente '{name}' y todas sus sesiones asociadas?")
-            
+
             col_confirm, col_cancel = st.columns(2)
             confirm = col_confirm.button("Confirmar eliminación", key=f"confirm_delete_{patient_id}", type="primary")
             cancel = col_cancel.button("Cancelar", key=f"cancel_delete_{patient_id}")
@@ -152,6 +159,7 @@ def app():
                     st.session_state.pop("delete_candidate", None)
                     st.rerun()
                 except Exception as e:
+                    log.exception("Error deleting patient %s", patient_id)
                     st.error(f"Error al eliminar paciente: {e}")
 
             elif cancel:

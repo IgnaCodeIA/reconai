@@ -4,6 +4,7 @@ import sys
 from core.path_manager import get_log_path
 
 def get_logger(name: str = "reconia"):
+    """Return a configured logger that writes DEBUG to file and INFO to stdout."""
     logger = logging.getLogger(name)
     if logger.handlers:
         return logger
@@ -23,7 +24,8 @@ def get_logger(name: str = "reconia"):
         fh.setFormatter(fmt)
         logger.addHandler(fh)
     except Exception:
-        pass  # si no se puede escribir el log en disco, al menos sigue funcionando con stdout
+        # If the disk log cannot be opened, fall back to stdout-only logging.
+        pass
 
     logger.addHandler(ch)
     logger.propagate = False

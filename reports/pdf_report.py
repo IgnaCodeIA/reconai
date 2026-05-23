@@ -7,6 +7,9 @@ import matplotlib.pyplot as plt
 
 from db.init_db import get_connection
 from db import crud
+from core.logger import get_logger
+
+log = get_logger("reports.pdf_report")
 
 
 def _fetch_session_bundle(session_id: int) -> Dict:
@@ -46,7 +49,7 @@ def _metrics_by_series(session_id: int) -> Dict[str, Dict[str, any]]:
     for name, value, unit in rows:
         if not isinstance(name, str):
             continue
-        
+
         if name.endswith("_min"):
             base, key = name[:-4], "min"
         elif name.endswith("_max"):
@@ -66,7 +69,7 @@ def _metrics_by_series(session_id: int) -> Dict[str, Dict[str, any]]:
 
         series.setdefault(base, {})
         series[base][key] = v
-        
+
         if "unit" not in series[base] and unit:
             series[base]["unit"] = unit
 
@@ -76,13 +79,13 @@ def _metrics_by_series(session_id: int) -> Dict[str, Dict[str, any]]:
 def _separate_metrics_by_type(series_map: Dict[str, Dict[str, any]]) -> Tuple[Dict, Dict]:
     angular = {}
     symmetry = {}
-    
+
     for serie, stats in series_map.items():
         if serie.startswith("symmetry_"):
             symmetry[serie] = stats
         else:
             angular[serie] = stats
-    
+
     return angular, symmetry
 
 
@@ -110,12 +113,12 @@ def _chart_ranges(series_map: Dict[str, Dict[str, float]], title: str = "Rango p
     fig = plt.figure(figsize=(8, 4))
     plt.title(title)
     plt.bar(labels, values, color='steelblue')
-    
+
     if labels and labels[0].startswith("symmetry_") and "_y" in labels[0]:
         plt.ylabel("pixels")
     else:
         plt.ylabel("degrees")
-    
+
     plt.xticks(rotation=20, ha="right")
     plt.tight_layout()
     return _figure_to_png_bytes(fig)
@@ -143,12 +146,12 @@ def _chart_min_max(series_map: Dict[str, Dict[str, float]], title: str = "Min y 
     plt.title(title)
     plt.bar(x - width / 2, mins, width, label="min", color='lightcoral')
     plt.bar(x + width / 2, maxs, width, label="max", color='lightgreen')
-    
+
     if labels and labels[0].startswith("symmetry_") and "_y" in labels[0]:
         plt.ylabel("pixels")
     else:
         plt.ylabel("degrees")
-    
+
     plt.xticks(x, labels, rotation=20, ha="right")
     plt.legend()
     plt.tight_layout()
@@ -161,36 +164,36 @@ def _chart_symmetry_overview(symmetry_map: Dict[str, Dict[str, float]]) -> bytes
         plt.title("Análisis de Simetría Bilateral")
         plt.text(0.5, 0.5, "Sin datos de simetría", ha="center", va="center")
         return _figure_to_png_bytes(fig)
-    
+
     angular_labels, angular_values = [], []
     positional_labels, positional_values = [], []
-    
+
     for serie, stats in sorted(symmetry_map.items()):
         if "max" not in stats:
             continue
-        
+
         label = serie.replace("symmetry_", "").replace("_", " ").title()
-        
+
         if "_y" in serie:
             positional_labels.append(label)
             positional_values.append(stats["max"])
         else:
             angular_labels.append(label)
             angular_values.append(stats["max"])
-    
+
     if angular_values and positional_values:
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
-        
+
         ax1.barh(angular_labels, angular_values, color='cornflowerblue')
         ax1.set_xlabel('Asimetría máxima (degrees)')
         ax1.set_title('Simetría Angular')
         ax1.invert_yaxis()
-        
+
         ax2.barh(positional_labels, positional_values, color='coral')
         ax2.set_xlabel('Asimetría máxima (pixels)')
         ax2.set_title('Simetría Posicional')
         ax2.invert_yaxis()
-        
+
         plt.tight_layout()
     else:
         fig = plt.figure(figsize=(8, 4))
@@ -204,12 +207,12 @@ def _chart_symmetry_overview(symmetry_map: Dict[str, Dict[str, float]]) -> bytes
             plt.title('Simetría Posicional')
         plt.gca().invert_yaxis()
         plt.tight_layout()
-    
+
     return _figure_to_png_bytes(fig)
 
 
 def _build_pdf_reportlab(bundle: Dict, series_map: Dict[str, Dict[str, float]],
-                         png_ranges: bytes, png_minmax: bytes, 
+                         png_ranges: bytes, png_minmax: bytes,
                          png_symmetry: bytes = None) -> bytes:
     from reportlab.lib.pagesizes import A4
     from reportlab.lib import colors
@@ -240,9 +243,9 @@ def _build_pdf_reportlab(bundle: Dict, series_map: Dict[str, Dict[str, float]],
     story.append(Spacer(1, 12))
 
     story.append(Paragraph("<b>3. Resumen de métricas</b>", styles["Heading2"]))
-    
+
     angular_metrics, symmetry_metrics = _separate_metrics_by_type(series_map)
-    
+
     if angular_metrics:
         story.append(Paragraph("<b>3.1 Ángulos Articulares</b>", styles["Heading3"]))
         table_data = [["Serie", "Métrica", "Valor", "Unidad"]]
@@ -250,9 +253,9 @@ def _build_pdf_reportlab(bundle: Dict, series_map: Dict[str, Dict[str, float]],
             for key in ("min", "max", "range"):
                 if key in stats:
                     table_data.append([
-                        serie, 
-                        key, 
-                        f"{stats[key]:.2f}", 
+                        serie,
+                        key,
+                        f"{stats[key]:.2f}",
                         stats.get("unit", "degrees")
                     ])
 
@@ -268,7 +271,7 @@ def _build_pdf_reportlab(bundle: Dict, series_map: Dict[str, Dict[str, float]],
         )
         story.append(tbl)
         story.append(Spacer(1, 12))
-    
+
     if symmetry_metrics:
         story.append(Paragraph("<b>3.2 Análisis de Simetría Bilateral</b>", styles["Heading3"]))
         story.append(Paragraph(
@@ -276,15 +279,15 @@ def _build_pdf_reportlab(bundle: Dict, series_map: Dict[str, Dict[str, float]],
             styles["BodyText"]
         ))
         story.append(Spacer(1, 6))
-        
+
         table_data = [["Serie", "Métrica", "Valor", "Unidad"]]
         for serie, stats in sorted(symmetry_metrics.items()):
             for key in ("min", "max", "range"):
                 if key in stats:
                     table_data.append([
-                        serie.replace("symmetry_", ""), 
-                        key, 
-                        f"{stats[key]:.2f}", 
+                        serie.replace("symmetry_", ""),
+                        key,
+                        f"{stats[key]:.2f}",
                         stats.get("unit", "degrees")
                     ])
 
@@ -302,12 +305,12 @@ def _build_pdf_reportlab(bundle: Dict, series_map: Dict[str, Dict[str, float]],
         story.append(Spacer(1, 12))
 
     story.append(Paragraph("<b>4. Visualizaciones</b>", styles["Heading2"]))
-    
+
     if png_symmetry and symmetry_metrics:
         story.append(Paragraph("<b>4.1 Análisis de Simetría Bilateral</b>", styles["Heading3"]))
         story.append(Image(io.BytesIO(png_symmetry), width=480, height=260))
         story.append(Spacer(1, 12))
-    
+
     if angular_metrics:
         story.append(Paragraph("<b>4.2 Rango de Movimiento Articular</b>", styles["Heading3"]))
         story.append(Image(io.BytesIO(png_ranges), width=480, height=260))
@@ -340,23 +343,23 @@ def _build_pdf_fallback_matplotlib(bundle: Dict, series_map: Dict[str, Dict[str,
 
         t("INFORME DE SESIÓN - RECON IA", size=16, bold=True, dy=0.05)
         y -= 0.02
-        
+
         t("1. Datos del paciente", bold=True)
         t(f"Nombre: {bundle.get('patient_name') or '—'}")
         t(f"ID paciente: {bundle.get('patient_id') or '—'}")
         t(f"Edad: {bundle.get('patient_age') if bundle.get('patient_age') is not None else '—'}")
         t(f"Género: {bundle.get('patient_gender') or '—'}")
         y -= 0.02
-        
+
         t("2. Detalles de la sesión", bold=True)
         t(f"ID sesión: {bundle.get('id')}")
         t(f"Fecha y hora: {bundle.get('datetime') or '—'}")
         t(f"Ejercicio: {bundle.get('exercise_name') or '—'}")
         t(f"Notas clínicas: {bundle.get('notes') or '—'}")
         y -= 0.02
-        
+
         angular_metrics, symmetry_metrics = _separate_metrics_by_type(series_map)
-        
+
         t("3. Resumen de métricas", bold=True)
         if angular_metrics:
             t("3.1 Ángulos Articulares", bold=True, dy=0.02)
@@ -366,7 +369,7 @@ def _build_pdf_fallback_matplotlib(bundle: Dict, series_map: Dict[str, Dict[str,
                     if key in stats:
                         unit = stats.get("unit", "degrees")
                         t(f"{serie} | {key} | {stats[key]:.2f} | {unit}", dy=0.02)
-        
+
         if symmetry_metrics:
             y -= 0.01
             t("3.2 Simetría Bilateral", bold=True, dy=0.02)
@@ -376,7 +379,7 @@ def _build_pdf_fallback_matplotlib(bundle: Dict, series_map: Dict[str, Dict[str,
                     if key in stats:
                         unit = stats.get("unit", "degrees")
                         t(f"{serie.replace('symmetry_', '')} | {key} | {stats[key]:.2f} | {unit}", dy=0.02)
-        
+
         pdf.savefig(fig)
         plt.close(fig)
 
@@ -411,14 +414,16 @@ def _build_pdf_fallback_matplotlib(bundle: Dict, series_map: Dict[str, Dict[str,
 
 
 def generate_session_report_pdf(session_id: int) -> bytes:
+    """Build a PDF report for the given session_id and return its raw bytes."""
+    log.debug("generate_session_report_pdf called with session_id=%s", session_id)
     bundle = _fetch_session_bundle(session_id)
     series_map = _metrics_by_series(session_id)
-    
+
     angular_metrics, symmetry_metrics = _separate_metrics_by_type(series_map)
 
     png_ranges = _chart_ranges(angular_metrics, "Rango de Movimiento Articular")
     png_minmax = _chart_min_max(angular_metrics, "Valores Mínimos y Máximos")
-    
+
     png_symmetry = None
     if symmetry_metrics:
         png_symmetry = _chart_symmetry_overview(symmetry_metrics)
@@ -426,4 +431,5 @@ def generate_session_report_pdf(session_id: int) -> bytes:
     try:
         return _build_pdf_reportlab(bundle, series_map, png_ranges, png_minmax, png_symmetry)
     except Exception:
+        log.exception("ReportLab PDF build failed; falling back to matplotlib backend")
         return _build_pdf_fallback_matplotlib(bundle, series_map, png_ranges, png_minmax, png_symmetry)
