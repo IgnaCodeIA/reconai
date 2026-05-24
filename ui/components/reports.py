@@ -7,28 +7,11 @@ import pandas as pd
 
 from db import crud
 from reports.pdf_report import generate_session_report_pdf
+from reports.excel_report import generate_session_excel
 from core.path_manager import get_exports_dir
 from core.logger import get_logger
 
 log = get_logger("ui.reports")
-
-
-def _generate_session_csv(session_info: dict, metrics: list) -> bytes:
-    """Generate a CSV with session info header + all metric rows."""
-    output = io.StringIO()
-
-    output.write("# RECON IA - Informe de sesión\n")
-    output.write(f"# Sesión ID:,{session_info.get('id', '')}\n")
-    output.write(f"# Paciente:,{session_info.get('patient_name', '')}\n")
-    output.write(f"# Ejercicio:,{session_info.get('exercise_name', '')}\n")
-    output.write(f"# Fecha:,{session_info.get('datetime', '')}\n")
-    output.write(f"# Observaciones:,\"{session_info.get('notes', '') or ''}\"\n")
-    output.write("#\n")
-
-    df = pd.DataFrame(metrics, columns=["metrica", "valor", "unidad"])
-    df.to_csv(output, index=False)
-
-    return output.getvalue().encode("utf-8")
 
 
 def _resolve_video_path(relative_path):
@@ -99,7 +82,7 @@ def _filter_sessions(sessions, selected_patient, selected_exercise, date_range):
 
 
 def app():
-    """Render the history & metrics page (browse sessions, view videos, export PDF/CSV)."""
+    """Render the history & metrics page (browse sessions, view videos, export PDF/Excel)."""
     st.title("Historial y Métricas")
     st.write("Consulte el histórico de sesiones, visualice vídeos y genere informes PDF.")
 
@@ -217,19 +200,19 @@ def app():
                         st.error(f"Error al generar PDF: {e}")
 
             with col_actions[2]:
-                if st.button("Exportar CSV", key=f"csv_{sid}"):
-                    metrics_for_csv = crud.get_metrics_by_session(sid)
-                    if not metrics_for_csv:
-                        st.warning("No hay métricas para exportar en esta sesión.")
-                    else:
-                        csv_bytes = _generate_session_csv(s, metrics_for_csv)
+                if st.button("Exportar Excel", key=f"excel_{sid}"):
+                    try:
+                        excel_bytes = generate_session_excel(sid)
                         st.download_button(
-                            label="Descargar CSV",
-                            data=csv_bytes,
-                            file_name=f"metricas_sesion_{sid}.csv",
-                            mime="text/csv",
-                            key=f"dl_csv_{sid}",
+                            label="Descargar Excel",
+                            data=excel_bytes,
+                            file_name=f"movimiento_sesion_{sid}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key=f"dl_excel_{sid}",
                         )
+                    except Exception as e:
+                        log.exception("Error generating Excel for session %s", sid)
+                        st.error(f"Error al generar Excel: {e}")
 
             with col_actions[3]:
                 if st.button("Eliminar", key=f"delete_{sid}"):
